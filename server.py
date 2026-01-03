@@ -15,7 +15,7 @@ ADMIN_PASSWORD = "admin"  # <--- CHANGE THIS
 DASHBOARD_FILE = os.path.join(DB_PATH, 'dashboard_data.json')
 ensure_setup()
 
-# --- AUTH LOGIC (SAME AS BEFORE) ---
+# --- AUTH LOGIC ---
 def login_required(f):
     @functools.wraps(f)
     def wrapped(*args, **kwargs):
@@ -168,7 +168,7 @@ def data():
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-# --- NEW PRO UI TEMPLATE ---
+# --- NEW PRO UI TEMPLATE (UPDATED CSS FOR SCROLLING) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -283,9 +283,15 @@ HTML_TEMPLATE = """
             background: var(--card);
             border-radius: 12px;
             border: 1px solid #222;
-            overflow: hidden;
+            overflow-y: auto; /* ENABLE SCROLLING */
+            max-height: 350px; /* LIMIT HEIGHT */
         }
         
+        /* SCROLLBAR STYLING */
+        .history-list::-webkit-scrollbar { width: 5px; }
+        .history-list::-webkit-scrollbar-track { background: #111; }
+        .history-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
         .history-item {
             display: flex;
             justify-content: space-between;
@@ -334,7 +340,7 @@ HTML_TEMPLATE = """
         <div style="font-size: 10px; color: #555; margin-top: 5px;" id="status">SYNCING SERVER...</div>
     </div>
 
-    <div style="width:100%; max-width:480px; margin-bottom:5px; font-size:11px; color:#555; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">Recent 20 Outcomes</div>
+    <div style="width:100%; max-width:480px; margin-bottom:5px; font-size:11px; color:#555; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">Recent 50 Outcomes</div>
     <div class="history-list" id="history-box">
         <div class="history-item" style="justify-content:center; color:#444;">No history yet...</div>
     </div>
