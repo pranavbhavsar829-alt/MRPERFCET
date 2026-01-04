@@ -360,7 +360,7 @@ def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Opti
 
     # 6b. SNIPER GUARD (Level 2 Protection)
     if state.loss_streak == 2:
-        if confidence < 0.75:
+        if confidence < 0.85:
             # Force SKIP if weak signal at Level 2
             state.last_prediction = TradeDecision.SKIP
             return {
