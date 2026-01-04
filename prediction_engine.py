@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-TITAN V700 - SOVEREIGN EDITION (WITH VISUAL CHART PATTERNS)
+TITAN V700 - SOVEREIGN PRO (SNIPER EDITION)
 =============================================================================
-Integrates:
-1. Basic Rules 1-25 (AABB, ABAB, AAB, etc.) from user charts.
-2. Trend, Reversion, Neuren, Qaum.
-3. Supervisor & Ghost Protocol.
+INTEGRATED LOGIC STACK:
+1. CHART PATTERNS: Visual Rhythm Recognition (25 Rules: Ping Pong, AABB, etc.)
+2. MATH ENGINES: Reversion (30), Trend (5), Neuren (6), Qaum (6)
+3. GHOST PROTOCOL: Inverts logic after 3 losses.
+4. SNIPER GUARD: At Level 2 (2 losses), ONLY bets on 85%+ Confidence.
 =============================================================================
 """
 
@@ -45,23 +46,30 @@ class EngineState:
 
 class GlobalState:
     def __init__(self):
+        # Streak Tracking
         self.loss_streak: int = 0
         self.total_wins: int = 0
         self.total_losses: int = 0
-        self.cooling_off_counter: int = 0 
+        
+        # Volatility Management
+        self.cooling_off_counter: int = 0  
+        
+        # Ghost Protocol (Inversion)
         self.inversion_mode: bool = False
         self.consecutive_fails: int = 0    
+        
+        # Session Money Management
         self.session_start_bankroll: float = 0.0
         self.current_profit: float = 0.0
         
-        # Engine Manager - UPDATED WEIGHTS FOR CHART PATTERNS
+        # Engine Manager (The Council)
+        # WEIGHTS UPDATED FOR "SOVEREIGN" LOGIC
         self.engines: Dict[str, EngineState] = {
             'trend': EngineState('trend', 1.0),
             'reversion': EngineState('reversion', 1.2),
             'neuren': EngineState('neuren', 2.0),
             'qaum': EngineState('qaum', 2.5),
-            # New powerful engine for your 25 rules
-            'chart_patterns': EngineState('chart_patterns', 4.0) 
+            'chart_patterns': EngineState('chart_patterns', 4.0) # The Boss
         }
         
         self.last_prediction: Optional[TradeDecision] = None
@@ -98,7 +106,7 @@ class MathLib:
         return current[-1] if current else 0.0
 
 # =============================================================================
-# SECTION 2: THE ENGINES (Updated with Chart Pattern Logic)
+# SECTION 2: THE ENGINES (TUNED FOR PRECISION)
 # =============================================================================
 
 class ChartPatternEngine:
@@ -123,68 +131,30 @@ class ChartPatternEngine:
 
     @staticmethod
     def analyze(outcomes: List[str]) -> float:
-        """
-        Returns:
-         1.0 (Strong Signal to continue Pattern)
-        -1.0 (Strong Signal to break/invert)
-         0.0 (No Pattern)
-         
-         The logic maps the 'Next Expected Move' to 1.0 if it matches the
-         last color, or -1.0 if it's the opposite color.
-        """
         if len(outcomes) < 6: return 0.0
+        last_outcome = outcomes[-1]
+        s = ChartPatternEngine.get_structure(outcomes)
         
-        # Current state
-        last_outcome = outcomes[-1] # e.g., "BIG"
-        structure = ChartPatternEngine.get_structure(outcomes) # e.g., [2, 2, 2]
-        
-        # We look at the TAIL of the structure (recent history)
-        s = structure 
-        
-        vote = 0.0
-        
-        # --- RULE SET 1: PING PONG & PAIRS (Rules 1, 2, 13) ---
-        # Pattern: 1-1-1-1 (Ping Pong)
+        # PATTERN 1: Ping Pong (1-1-1-1) -> Expect Continue
         if len(s) >= 4 and s[-4:] == [1, 1, 1, 1]:
-            # Expect next to be 1 (Opposite of last). 
-            # If we predict "Opposite", that means we want a CHANGE.
-            # In engine logic: 1.0 = Big, -1.0 = Small.
-            # Here we return a directional hint relative to pattern.
             return -1.0 if last_outcome == "BIG" else 1.0
 
-        # Pattern: 2-2-2 (Pairs / Double Trend)
+        # PATTERN 2: Double Trend (2-2-2) -> Expect Break
         if len(s) >= 3 and s[-3:] == [2, 2, 2]:
-            return -1.0 if last_outcome == "BIG" else 1.0 # Expect break after pair finishes
+            return -1.0 if last_outcome == "BIG" else 1.0 
 
-        # Pattern: 2-2 (Start of Pairs) - Betting on the "2nd" leg
+        # PATTERN 3: Pairs Formation (x-x-2-1) -> Expect 2-2
         if len(s) >= 2 and s[-2] == 2 and s[-1] == 1:
-            # We have [..., 2, 1]. Rule 2 says it should be 2, 2.
-            # So we expect the current 1 to become a 2.
             return 1.0 if last_outcome == "BIG" else -1.0
 
-        # --- RULE SET 2: RHYTHMS (Rules 5, 7, 8, 9) ---
-        
-        # Rule 5: 2-1-2-1 (AAB AAB)
+        # PATTERN 4: The "2-1-2" Rhythm (AAB AAB)
         if len(s) >= 3 and s[-3:] == [2, 1, 2]:
-            # Next should be a 1.
-            # Currently we just finished a 2. Next is opposite.
-            return -1.0 if last_outcome == "BIG" else 1.0
+            return -1.0 if last_outcome == "BIG" else 1.0 
         if len(s) >= 3 and s[-3:] == [1, 2, 1]:
-             # Next should be a 2. Current is 1. We bet SAME.
-             return 1.0 if last_outcome == "BIG" else -1.0
+             return 1.0 if last_outcome == "BIG" else -1.0 
 
-        # Rule 7: 1-2-1-2 (ABB ABB)
-        # Similar logic to above, handled by general rhythm check.
-
-        # Rule 3: 3-3 (Triplets)
-        if len(s) >= 2 and s[-2] == 3 and s[-1] == 2:
-            # We are at 3-2. Need to complete the triplet. Bet Same.
-            return 1.0 if last_outcome == "BIG" else -1.0
-            
-        # --- RULE SET 3: DRAGON (Long Trend) ---
-        # If current streak is > 4 (Rule 6/11)
-        if s[-1] >= 4:
-            # Ride the dragon until it breaks
+        # PATTERN 5: The Dragon (Streak >= 5)
+        if s[-1] >= 5:
             return 1.0 if last_outcome == "BIG" else -1.0
 
         return 0.0
@@ -192,23 +162,25 @@ class ChartPatternEngine:
 class Engines:
     @staticmethod
     def trend_engine(outcomes: List[str]) -> float:
-        if len(outcomes) < 5: return 0.0
-        last_4 = outcomes[-4:]
-        # Simple Stickiness
-        if last_4.count("BIG") == 4: return 1.0     
-        if last_4.count("SMALL") == 4: return -1.0  
+        # TUNED: Window 5 (Safety)
+        if len(outcomes) < 6: return 0.0
+        last_5 = outcomes[-5:]
+        if last_5.count("BIG") == 5: return 1.0     
+        if last_5.count("SMALL") == 5: return -1.0  
         return 0.0
 
     @staticmethod
     def reversion_engine(numbers: List[float]) -> float:
-        if len(numbers) < 15: return 0.0
-        z = MathLib.get_z_score(numbers[-20:])
-        if z > 2.0: return -1.0
-        elif z < -2.0: return 1.0
+        # TUNED: Window 30 (Professional Z-Score)
+        if len(numbers) < 31: return 0.0
+        z = MathLib.get_z_score(numbers[-30:])
+        if z > 2.2: return -1.0   
+        elif z < -2.2: return 1.0 
         return 0.0
 
     @staticmethod
     def neuren_engine(numbers: List[float]) -> float:
+        # FAST: Window 6
         if len(numbers) < 6: return 0.0
         jerk = MathLib.get_derivative(numbers, 3)
         if jerk > 5.0: return -1.0  
@@ -217,11 +189,13 @@ class Engines:
 
     @staticmethod
     def qaum_engine(numbers: List[float]) -> float:
-        if len(numbers) < 5: return 0.0
-        recent = numbers[-4:]
+        # TUNED: Window 6 (Better Variance)
+        if len(numbers) < 7: return 0.0
+        recent = numbers[-6:]
         try: variance = statistics.pvariance(recent)
         except: return 0.0
-        if variance < 0.8:
+        
+        if variance < 1.0: 
             return 1.0 if (sum(recent)/len(recent)) < 4.5 else -1.0        
         return 0.0
 
@@ -234,7 +208,7 @@ class MarketMonitor:
     def check_volatility(numbers: List[float]) -> Tuple[bool, str]:
         if len(numbers) < 10: return False, "OK"
         recent = numbers[-8:]
-        # Pure Chaos check: 01010101 extremely fast switching
+        # Chaos Check: 01010101 extremely fast switching
         binary = [0 if x <= 4 else 1 for x in recent]
         switches = sum(1 for i in range(len(binary)-1) if binary[i] != binary[i+1])
         if switches >= 7: return True, "EXTREME_CHOP"
@@ -255,11 +229,10 @@ class EngineManager:
             if engine.last_vote == actual:
                 if engine.consecutive_losses > 0: engine.consecutive_losses -= 1
                 if not engine.is_active:
-                    engine.is_active = True # Quick recovery
+                    engine.is_active = True 
             else:
                 engine.consecutive_losses += 1
                 if engine.is_active and engine.consecutive_losses >= config.stop_loss_streak:
-                    print(f"[MANAGER] {name.upper()} Failed. BANNED.")
                     engine.is_active = False
 
 # =============================================================================
@@ -272,7 +245,6 @@ class VotingCouncil:
         reasons = []
         
         # 1. Collect Votes
-        # Note: ChartPatternEngine analyzes the visual patterns from your screenshots
         raw_votes = {
             'trend': Engines.trend_engine(outcomes),
             'reversion': Engines.reversion_engine(numbers),
@@ -294,10 +266,9 @@ class VotingCouncil:
             
             if not eng.is_active:
                 continue
-                
-            # Chart Patterns get higher priority if they find a match
-            current_weight = eng.weight
             
+            # Chart Patterns get High Weight (4.0)
+            current_weight = eng.weight
             active_weight_sum += current_weight
             score += val * current_weight
             if val != 0: reasons.append(f"{name}({val:+.1f})")
@@ -310,7 +281,7 @@ class VotingCouncil:
         
         decision = TradeDecision.SKIP
         conf = 0.0
-        THRESHOLD = 0.5 # Aggressive entry
+        THRESHOLD = 0.5 
         
         if normalized_score >= THRESHOLD:
             decision = TradeDecision.BIG
@@ -322,16 +293,17 @@ class VotingCouncil:
         return decision, conf, reasons
 
 # =============================================================================
-# MAIN EXPORT
+# MAIN EXPORT: ULTRA AI PREDICT
 # =============================================================================
 
 def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Optional[str] = None) -> Dict:
     
+    # --- PHASE 0: INITIALIZATION ---
     if state.session_start_bankroll == 0:
         state.session_start_bankroll = currentbankroll
     state.current_profit = currentbankroll - state.session_start_bankroll
 
-    # Clean Data
+    # --- PHASE 1: DATA CLEANING ---
     clean_nums = []
     clean_outcomes = []
     for item in reversed(history):
@@ -341,11 +313,10 @@ def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Opti
             if 0 <= int(v) <= 4: clean_outcomes.append("SMALL")
             elif 5 <= int(v) <= 9: clean_outcomes.append("BIG")
 
-    # Manager Update
+    # --- PHASE 2: FEEDBACK & GHOST CHECK ---
     if lastresult and state.last_prediction and state.last_prediction != TradeDecision.SKIP:
         EngineManager.update_performance(lastresult)
         
-        # Ghost Protocol Check
         real_res = TradeDecision.BIG if lastresult == "BIG" else TradeDecision.SMALL
         if state.last_prediction == real_res:
             state.loss_streak = 0
@@ -357,7 +328,7 @@ def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Opti
                 if state.consecutive_fails >= 3:
                     state.inversion_mode = True
 
-    # Safety
+    # --- PHASE 3: SAFETY ---
     if state.cooling_off_counter > 0:
         state.cooling_off_counter -= 1
 
@@ -366,11 +337,11 @@ def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Opti
         return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
                 'level': "DANGER", 'reason': vol_reason, 'topsignals': ["UNSAFE"]}
 
-    # Prediction
+    # --- PHASE 4: PREDICTION ---
     council = VotingCouncil()
     decision, confidence, signals = council.cast_votes(clean_nums, clean_outcomes)
     
-    # Ghost Flip
+    # --- PHASE 5: GHOST FLIP ---
     final_decision_str = decision.value
     meta_status = "STANDARD"
     if decision != TradeDecision.SKIP and state.inversion_mode:
@@ -379,16 +350,44 @@ def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Opti
         elif decision == TradeDecision.SMALL: final_decision_str = "BIG"
         signals.append("INVERTED")
 
+    # --- PHASE 6: DYNAMIC STAKE & SNIPER GUARD ---
+    
+    # 6a. Basic Skip
     if final_decision_str == "SKIP":
         state.last_prediction = TradeDecision.SKIP
         return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
                 'level': "WAIT", 'reason': "Low Conf", 'topsignals': signals}
 
-    # Staking
+    # 6b. SNIPER GUARD (Level 2 Protection)
+    if state.loss_streak == 2:
+        if confidence < 0.85:
+            # Force SKIP if weak signal at Level 2
+            state.last_prediction = TradeDecision.SKIP
+            return {
+                'finalDecision': "SKIP", 
+                'confidence': 0, 
+                'positionsize': 0, 
+                'level': f"L2 ({meta_status})", 
+                'reason': f"Sniper Guard: Wait for 85%+ (Got {int(confidence*100)}%)", 
+                'topsignals': ["SNIPER_MODE"]
+            }
+
+    # 6c. Stake Calculation
     base_stake = max(currentbankroll * config.base_risk_percent, config.min_bet_amount)
+    
+    # House Money
+    if state.current_profit > 100:
+        base_stake *= 1.5
+        meta_status += "|AGGRESSIVE"
+    elif state.current_profit < -150:
+        base_stake *= 0.5
+        meta_status += "|DEFENSIVE"
+        
+    # Martingale
     stake = base_stake * (config.martingale_multiplier ** state.loss_streak)
     if stake > (currentbankroll * 0.20): stake = currentbankroll * 0.20
 
+    # Save State
     state.last_prediction = TradeDecision(final_decision_str)
     state.last_confidence = confidence
 
@@ -400,3 +399,6 @@ def ultraAIPredict(history: List[Dict], currentbankroll: float, lastresult: Opti
         'reason': " | ".join(signals),
         'topsignals': signals
     }
+
+if __name__ == "__main__":
+    print("TITAN V700 SOVEREIGN (SNIPER EDITION) LOADED.")
