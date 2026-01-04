@@ -5,17 +5,28 @@ import os
 import json
 import functools
 import uuid
+import hmac
+import hashlib
+import base64
+import time
 from datetime import datetime, timedelta
 from database_handler import create_connection, DB_PATH, ensure_setup, cleanup_inactive_sessions
 
 app = Flask(__name__)
 app.secret_key = "TITAN_SECURE_KEY_CHANGE_THIS" 
-ADMIN_PASSWORD = "admin"  # <--- CHANGE THIS
+ADMIN_PASSWORD = "admin" 
+
+# --- CRITICAL: SECURITY CONFIGURATION ---
+# This SECRET must match the one in your local_generator.py EXACTLY.
+OFFLINE_SECRET = "TITAN_OFFLINE_SECRET_CODE_123"
+
+# Master Key (Always works, even if DB is wiped)
+MASTER_KEY = "TITAN-PERM-ADMIN" 
 
 DASHBOARD_FILE = os.path.join(DB_PATH, 'dashboard_data.json')
 ensure_setup()
 
-# --- AUTH LOGIC (SAME AS BEFORE) ---
+# --- AUTH LOGIC ---
 def login_required(f):
     @functools.wraps(f)
     def wrapped(*args, **kwargs):
@@ -30,9 +41,78 @@ def admin_required(f):
         return f(*args, **kwargs)
     return wrapped
 
-# --- KEY VALIDATION & SESSION LOGIC ---
+# --- 1. STATELESS KEY VERIFICATION (OFFLINE KEYS) ---
+def verify_stateless_key(key_input):
+    try:
+        # Format: TITAN-PAYLOAD-SIGNATURE
+        parts = key_input.split('-')
+        if len(parts) != 3 or parts[0] != "TITAN":
+            return False, "INVALID FORMAT"
+        
+        payload_encoded = parts[1]
+        signature_input = parts[2]
+        
+        # Decode Payload
+        try:
+            padding = len(payload_encoded) % 4
+            if padding: payload_encoded += '=' * (4 - padding)
+            payload = base64.urlsafe_b64decode(payload_encoded).decode()
+            timestamp_str, max_dev_str = payload.split('|')
+            expiry_ts = int(timestamp_str)
+            max_dev = int(max_dev_str)
+        except:
+            return False, "CORRUPT KEY"
+
+        # Verify Signature
+        expected_sig = hmac.new(
+            OFFLINE_SECRET.encode(), 
+            payload.encode(), 
+            hashlib.sha256
+        ).hexdigest()[:8].upper()
+        
+        if not hmac.compare_digest(expected_sig, signature_input):
+            return False, "FAKE KEY DETECTED"
+            
+        # Check Expiration
+        if time.time() > expiry_ts:
+            return False, "KEY EXPIRED"
+            
+        return True, "OK"
+        
+    except Exception as e:
+        return False, "ERROR"
+
+# --- 2. MAIN LOGIN LOGIC ---
 def validate_key_and_login(key_input):
     cleanup_inactive_sessions()
+    
+    # A. MASTER KEY CHECK
+    if key_input == MASTER_KEY:
+        session['session_uuid'] = str(uuid.uuid4())
+        return True, "OK"
+
+    # B. STATELESS KEY CHECK (Offline)
+    if key_input.startswith("TITAN-"):
+        is_valid, msg = verify_stateless_key(key_input)
+        if is_valid:
+            # Key is valid mathematically.
+            # We treat it as a valid session without needing a DB lookup for the key itself.
+            my_session_id = session.get('session_uuid') or str(uuid.uuid4())
+            session['session_uuid'] = my_session_id
+            
+            # Record session for counting (optional, best effort)
+            try:
+                conn = create_connection()
+                conn.execute("INSERT OR REPLACE INTO active_sessions (session_id, key_code, last_seen) VALUES (?, ?, ?)", (my_session_id, key_input, datetime.now()))
+                conn.commit()
+                conn.close()
+            except: pass
+            
+            return True, "OK"
+        else:
+            return False, msg
+
+    # C. DATABASE KEY CHECK (Legacy/Online Keys)
     conn = create_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM access_keys WHERE key_code = ? AND is_active = 1", (key_input,))
@@ -44,10 +124,12 @@ def validate_key_and_login(key_input):
     if expires_at and datetime.now() > datetime.strptime(expires_at, '%Y-%m-%d %H:%M:%S.%f'):
         conn.close()
         return False, "KEY EXPIRED"
+    
     max_devices = row[5] if len(row) > 5 else 1
     cur.execute("SELECT COUNT(*) FROM active_sessions WHERE key_code = ?", (key_input,))
     current_users = cur.fetchone()[0]
     my_session_id = session.get('session_uuid')
+    
     if current_users < max_devices or (my_session_id and check_is_active(my_session_id)):
         new_uuid = my_session_id if my_session_id else str(uuid.uuid4())
         session['session_uuid'] = new_uuid
@@ -61,24 +143,11 @@ def validate_key_and_login(key_input):
 
 def check_is_active(sess_id):
     conn = create_connection()
-    row = conn.execute("SELECT * FROM active_sessions WHERE session_id = ?", (sess_id,)).fetchone()
+    try:
+        row = conn.execute("SELECT * FROM active_sessions WHERE session_id = ?", (sess_id,)).fetchone()
+    except: return False
     conn.close()
     return row is not None
-
-def generate_key(days=30, max_dev=1, note="Generated"):
-    key = "KEY-" + secrets.token_hex(4).upper()
-    expiration_date = datetime.now() + timedelta(days=int(days))
-    conn = create_connection()
-    conn.execute("INSERT INTO access_keys (key_code, note, expires_at, max_devices) VALUES (?, ?, ?, ?)", (key, note, expiration_date, int(max_dev)))
-    conn.commit()
-    conn.close()
-
-def revoke_key(key):
-    conn = create_connection()
-    conn.execute("DELETE FROM access_keys WHERE key_code = ?", (key,))
-    conn.execute("DELETE FROM active_sessions WHERE key_code = ?", (key,))
-    conn.commit()
-    conn.close()
 
 # --- ROUTES ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -99,10 +168,12 @@ def login():
 @app.route('/heartbeat', methods=['POST'])
 def heartbeat():
     if session.get('authenticated') and session.get('session_uuid'):
-        conn = create_connection()
-        conn.execute("UPDATE active_sessions SET last_seen = ? WHERE session_id = ?", (datetime.now(), session['session_uuid']))
-        conn.commit()
-        conn.close()
+        try:
+            conn = create_connection()
+            conn.execute("UPDATE active_sessions SET last_seen = ? WHERE session_id = ?", (datetime.now(), session['session_uuid']))
+            conn.commit()
+            conn.close()
+        except: pass
         return jsonify({"status": "ok"})
     return jsonify({"status": "ignored"})
 
@@ -123,33 +194,26 @@ def admin_panel():
     conn.close()
     rows = ""
     for k in keys:
-        expiry = k[4][:10] if k[4] else "Lifetime"
+        expiry = k[4][:16] if k[4] else "Lifetime" 
         max_dev = k[5] if len(k) > 5 else 1
-        rows += f"<tr><td>{k[0]}</td><td>{k[1]}</td><td>{expiry}</td><td>Max: {max_dev}</td><td><a href='/admin/del/{k[0]}' style='color:red'>REVOKE</a></td></tr>"
+        rows += f"<tr><td>{k[0]}</td><td>{k[1]}</td><td>{expiry}</td><td>Max: {max_dev}</td><td>Online DB</td></tr>"
     return f"""<body style="font-family:monospace; padding:20px;"><h1>ADMIN</h1>
             <div style="background:#eee; padding:10px;">
-            <form action="/admin/gen" method="POST">Days: <input type="number" name="days" value="30" style="width:40px;"> MaxUser: <input type="number" name="max_dev" value="1" style="width:40px;"> Note: <input type="text" name="note"> <button>GENERATE</button></form></div>
+            <p><strong>SYSTEM MODE:</strong> Hybrid (Offline Keys Enabled)</p>
+            <p>Use <code>local_generator.py</code> on your PC to create permanent keys.</p>
+            </div>
+            <h3>Database Keys (Will be deleted if server sleeps)</h3>
             <table border="1" cellpadding="5" style="width:100%; margin-top:20px;">{rows}</table></body>"""
-
-@app.route('/admin/gen', methods=['POST'])
-@admin_required
-def gen():
-    generate_key(request.form.get('days'), request.form.get('max_dev'), request.form.get('note'))
-    return redirect(url_for('admin_panel'))
-
-@app.route('/admin/del/<k>')
-@admin_required
-def delete(k):
-    revoke_key(k)
-    return redirect(url_for('admin_panel'))
 
 @app.route('/logout')
 def logout():
     if session.get('session_uuid'):
-        conn = create_connection()
-        conn.execute("DELETE FROM active_sessions WHERE session_id = ?", (session['session_uuid'],))
-        conn.commit()
-        conn.close()
+        try:
+            conn = create_connection()
+            conn.execute("DELETE FROM active_sessions WHERE session_id = ?", (session['session_uuid'],))
+            conn.commit()
+            conn.close()
+        except: pass
     session.clear()
     return redirect(url_for('login'))
 
@@ -161,14 +225,14 @@ def data():
             with open(DASHBOARD_FILE, 'r') as f:
                 return jsonify(json.load(f))
     except: pass
-    return jsonify({"period": "---", "prediction": "LOADING", "timer": 0})
+    return jsonify({"period": "---", "prediction": "LOADING", "timer": 0, "stats": {"wins":0, "losses":0, "accuracy":"0%"}})
 
 @app.route('/')
 @login_required
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-# --- NEW PRO UI TEMPLATE ---
+# --- PRO UI TEMPLATE ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -247,11 +311,10 @@ HTML_TEMPLATE = """
             overflow: hidden;
         }
         
-        /* TIMER BAR */
         .timer-bar {
             position: absolute;
             top: 0; left: 0; height: 4px; background: var(--accent);
-            width: 100%; transition: width 1s linear;
+            width: 100%; transition: width 0.5s linear;
         }
 
         .period-display { font-family: 'JetBrains Mono'; color: #666; font-size: 14px; margin-bottom: 10px; }
@@ -283,9 +346,14 @@ HTML_TEMPLATE = """
             background: var(--card);
             border-radius: 12px;
             border: 1px solid #222;
-            overflow: hidden;
+            overflow-y: auto;
+            max-height: 350px;
         }
         
+        .history-list::-webkit-scrollbar { width: 6px; }
+        .history-list::-webkit-scrollbar-track { background: #111; }
+        .history-list::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
         .history-item {
             display: flex;
             justify-content: space-between;
@@ -334,13 +402,13 @@ HTML_TEMPLATE = """
         <div style="font-size: 10px; color: #555; margin-top: 5px;" id="status">SYNCING SERVER...</div>
     </div>
 
-    <div style="width:100%; max-width:480px; margin-bottom:5px; font-size:11px; color:#555; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">Recent 20 Outcomes</div>
+    <div style="width:100%; max-width:480px; margin-bottom:5px; font-size:11px; color:#555; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">Recent 50 Outcomes</div>
     <div class="history-list" id="history-box">
         <div class="history-item" style="justify-content:center; color:#444;">No history yet...</div>
     </div>
 
     <script>
-        // --- HEARTBEAT FOR SESSION ---
+        // --- HEARTBEAT ---
         setInterval(() => { fetch('/heartbeat', { method: 'POST' }); }, 30000);
 
         function updateData() {
@@ -370,7 +438,6 @@ HTML_TEMPLATE = """
                     if(timeLeft < 10) cdEl.classList.add('danger');
                     else cdEl.classList.remove('danger');
 
-                    // Update Timer Bar width
                     const percent = (timeLeft / 60) * 100;
                     document.getElementById('timer-bar').style.width = percent + "%";
 
@@ -406,8 +473,7 @@ HTML_TEMPLATE = """
                 .catch(err => console.log(err));
         }
 
-        // Fast polling for timer smoothness
-        setInterval(updateData, 1000);
+        setInterval(updateData, 500);
         updateData();
     </script>
 </body>
