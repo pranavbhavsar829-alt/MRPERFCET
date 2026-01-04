@@ -1,43 +1,38 @@
 import aiohttp
 import asyncio
 import json
-import sqlite3
+import os
 import time
 import sys
-import os
 from collections import deque
 from datetime import datetime
 
 # --- IMPORT ENGINE ---
 try:
     from prediction_engine import ultraAIPredict
-    print("[INIT] TITAN V700 ENGINE LINKED SUCCESSFULLY.")
+    print("[INIT] TITAN V700 ENGINE LINKED.")
 except ImportError:
-    print("[ERROR] prediction_engine.py is missing! Predictions will fail.")
+    print("[ERROR] prediction_engine.py is missing!")
 
-# --- CONFIGURATION ---
-API_URL = "https://harshpredictor.site/api/api.php"
+# --- NEW CONFIGURATION ---
+# Using the new API provided by the user
+API_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Connection": "keep-alive"
+    "Accept": "application/json"
 }
 
-# --- CRITICAL FIX: FORCE RENDER DISK PATH ---
-# We check if /var/lib/data exists (Render Disk). If yes, we MUST use it.
+# --- RENDER DISK PATH ---
 if os.path.exists('/var/lib/data'):
     BASE_DIR = '/var/lib/data'
-    print("[SYSTEM] Using Render Persistent Disk: /var/lib/data")
 else:
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-    print(f"[SYSTEM] Using Local Storage: {BASE_DIR}")
 
 DASHBOARD_FILE = os.path.join(BASE_DIR, 'dashboard_data.json')
 
 # --- SETTINGS ---
 HISTORY_LIMIT = 2000       
-INITIAL_FETCH_SIZE = 1000  
-LIVE_FETCH_SIZE = 5        
+MIN_DATA_REQUIRED = 30  # START PREDICTING ONLY AFTER 30 RECORDS
 
 # --- MEMORY STORAGE ---
 RAM_HISTORY = deque(maxlen=HISTORY_LIMIT)
@@ -46,29 +41,26 @@ UI_HISTORY = deque(maxlen=50)
 # --- GLOBAL STATE ---
 currentbankroll = 10000.0 
 last_prediction = {
-    "issue": None, 
-    "label": "WAITING", 
-    "stake": 0, 
-    "conf": 0, 
-    "level": "---", 
-    "reason": "System Initializing...", 
-    "strategy": "BOOTING"
+    "issue": None, "label": "WAITING", "stake": 0, "conf": 0, 
+    "level": "---", "reason": "Collecting Data...", "strategy": "BOOTING"
 }
-last_win_status = "NONE"
 session_wins = 0
 session_losses = 0
+last_win_status = "NONE"
 
 def get_outcome_from_number(n):
     try:
         val = int(float(n))
-        if 0 <= val <= 4: return "SMALL"
-        if 5 <= val <= 9: return "BIG"
-    except: pass
-    return None
+        return "SMALL" if 0 <= val <= 4 else "BIG"
+    except: return None
 
 def update_dashboard(status_text="IDLE", timer_val=0):
     total = session_wins + session_losses
     acc = f"{(session_wins/total)*100:.0f}%" if total > 0 else "0%"
+    
+    # Logic to show collection progress
+    if len(RAM_HISTORY) < MIN_DATA_REQUIRED:
+        status_text = f"COLLECTING DATA ({len(RAM_HISTORY)}/{MIN_DATA_REQUIRED})"
     
     data = {
         "period": last_prediction['issue'] if last_prediction['issue'] else "---",
@@ -87,121 +79,89 @@ def update_dashboard(status_text="IDLE", timer_val=0):
         "history": list(UI_HISTORY),
         "timestamp": time.time()
     }
-    
-    try:
-        temp_file = DASHBOARD_FILE + ".tmp"
-        with open(temp_file, "w") as f: 
-            json.dump(data, f)
-        os.replace(temp_file, DASHBOARD_FILE)
-    except Exception as e: 
-        print(f"[DASHBOARD ERROR] Could not write JSON: {e}")
+    with open(DASHBOARD_FILE, "w") as f: json.dump(data, f)
 
-async def fetch_data(session, limit=5):
+async def fetch_data(session):
     try:
-        params = {'pageSize': limit, 'page': 1}
-        async with session.get(API_URL, headers=HEADERS, params=params, timeout=10) as response:
+        # Some APIs require POST, we try GET first as per user URL
+        async with session.get(API_URL, headers=HEADERS, timeout=10) as response:
             if response.status == 200:
                 d = await response.json()
-                return d.get('data', {}).get('list', [])
+                # Standard extraction for common WinGo JSON structures
+                if isinstance(d, dict):
+                    return d.get('data', {}).get('list', []) or d.get('list', [])
+                return d
     except Exception as e:
-        print(f"[FETCH ERROR] Connection failed: {e}")
+        print(f"[FETCH ERROR] {e}")
     return None
 
 async def main_loop():
     global currentbankroll, last_prediction, last_win_status, session_wins, session_losses
-    print("--- TITAN V700 FETCHER STARTED ---")
-    
     last_processed_issue = None
     
     async with aiohttp.ClientSession() as session:
-        print(f"[STARTUP] Fetching history...")
-        update_dashboard("LOADING HISTORY...", 0)
-        
-        startup_data = await fetch_data(session, INITIAL_FETCH_SIZE)
-        
-        if startup_data:
-            for item in reversed(startup_data):
-                try:
-                    curr_issue = str(item['issueNumber'])
-                    curr_code = int(item['number'])
-                    new_record = {'issue': curr_issue, 'actual_number': curr_code}
-                    RAM_HISTORY.append(new_record)
-                except: continue
-            
-            print(f"[STARTUP] Loaded {len(RAM_HISTORY)} records.")
-            if len(startup_data) > 0:
-                last_processed_issue = str(startup_data[0]['issueNumber'])
-        else:
-            print("[STARTUP] Failed to load history.")
-
-        print("[SYSTEM] Live Mode Active")
+        print("[SYSTEM] Starting Titan V700 with New API...")
         
         while True:
-            raw_list = await fetch_data(session, LIVE_FETCH_SIZE)
-            
+            raw_list = await fetch_data(session)
             if raw_list:
+                # API usually gives 10 records, we process all new ones
+                for item in reversed(raw_list):
+                    try:
+                        # Extract issue and number (Supports multiple API formats)
+                        issue = str(item.get('issueNumber') or item.get('issue'))
+                        num = int(item.get('number') or item.get('result'))
+                        
+                        if not RAM_HISTORY or RAM_HISTORY[-1]['issue'] != issue:
+                            RAM_HISTORY.append({'issue': issue, 'actual_number': num})
+                            print(f"[STORED] {issue}: {num} (Total: {len(RAM_HISTORY)})")
+                    except: continue
+
                 latest = raw_list[0]
-                curr_issue = str(latest['issueNumber'])
-                curr_code = int(latest['number'])
+                curr_issue = str(latest.get('issueNumber') or latest.get('issue'))
+                curr_code = int(latest.get('number') or latest.get('result'))
                 
                 now = datetime.now()
                 seconds_left = 60 - now.second
                 update_dashboard("SYNCED", seconds_left)
-                
+
                 if curr_issue != last_processed_issue:
-                    print(f"[NEW] {curr_issue}: {curr_code}")
-                    
-                    new_record = {'issue': curr_issue, 'actual_number': curr_code}
-                    if not RAM_HISTORY or RAM_HISTORY[-1]['issue'] != curr_issue:
-                        RAM_HISTORY.append(new_record)
-                    
-                    if last_prediction['issue'] and last_prediction['label'] != "SKIP":
-                        real_outcome = get_outcome_from_number(curr_code)
-                        predicted = last_prediction['label']
-                        is_win = (predicted == real_outcome)
-                        
-                        if predicted in ["RED", "GREEN"]:
-                            real_c = "RED" if curr_code in [0,2,4,6,8] else "GREEN"
-                            if curr_code == 5: real_c = "GREEN"
-                            if predicted == real_c: is_win = True
+                    # 1. Check Previous Result
+                    if last_prediction['issue'] == curr_issue:
+                        real = get_outcome_from_number(curr_code)
+                        if last_prediction['label'] != "SKIP":
+                            if last_prediction['label'] == real:
+                                session_wins += 1
+                                last_win_status = "WIN"
+                                UI_HISTORY.appendleft({"period": curr_issue, "pred": last_prediction['label'], "result": "WIN"})
+                            else:
+                                session_losses += 1
+                                last_win_status = "LOSS"
+                                UI_HISTORY.appendleft({"period": curr_issue, "pred": last_prediction['label'], "result": "LOSS"})
 
-                        if is_win:
-                            session_wins += 1
-                            last_win_status = "WIN"
-                            UI_HISTORY.appendleft({"period": last_prediction['issue'], "pred": predicted, "result": "WIN"})
-                        else:
-                            session_losses += 1
-                            last_win_status = "LOSS"
-                            UI_HISTORY.appendleft({"period": last_prediction['issue'], "pred": predicted, "result": "LOSS"})
-
-                    next_issue = str(int(curr_issue) + 1)
-                    
-                    for i in range(5, 0, -1):
-                        update_dashboard(f"ANALYZING... {i}", seconds_left)
-                        await asyncio.sleep(1)
-                        seconds_left = 60 - datetime.now().second
-
-                    if len(RAM_HISTORY) > 10:
+                    # 2. Start Prediction Only if we have 30+ records
+                    if len(RAM_HISTORY) >= MIN_DATA_REQUIRED:
                         try:
-                            ai_result = ultraAIPredict(list(RAM_HISTORY), currentbankroll, get_outcome_from_number(curr_code))
+                            next_issue = str(int(curr_issue) + 1)
+                            res = ultraAIPredict(list(RAM_HISTORY), currentbankroll, get_outcome_from_number(curr_code))
                             last_prediction = {
                                 "issue": next_issue, 
-                                "label": ai_result['finalDecision'], 
-                                "stake": ai_result['positionsize'],
-                                "conf": ai_result['confidence'],
-                                "level": ai_result['level'],
-                                "strategy": ai_result.get('strategy_status', 'STANDARD'),
-                                "reason": ai_result.get('reason', 'Processing...')
+                                "label": res['finalDecision'], 
+                                "stake": res['positionsize'],
+                                "conf": res['confidence'],
+                                "level": res['level'],
+                                "strategy": "SOVEREIGN",
+                                "reason": res.get('reason', 'Pattern Match')
                             }
                         except Exception as e:
-                            print(f"[ERROR] Engine: {e}")
-                            last_prediction['label'] = "ERROR"
-                    
+                            print(f"[ENGINE ERROR] {e}")
+                    else:
+                        last_prediction['label'] = "COLLECTING"
+                        last_prediction['reason'] = f"Wait for 30 records (Current: {len(RAM_HISTORY)})"
+
                     last_processed_issue = curr_issue
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2)
 
 if __name__ == '__main__':
-    if sys.platform == 'win32': 
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main_loop())
