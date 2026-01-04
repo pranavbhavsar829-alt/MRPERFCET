@@ -1,7 +1,3 @@
-# ==============================================================================
-# MODULE: FETCHER.PY (TIMER FIX APPLIED)
-# ==============================================================================
-
 import aiohttp
 import asyncio
 import json
@@ -49,15 +45,25 @@ DB_FILE = 'ar_lottery_history.db'
 DASHBOARD_FILE = 'dashboard_data.json'
 
 RAM_HISTORY = deque(maxlen=HISTORY_LIMIT)
-UI_HISTORY = deque(maxlen=7) 
+UI_HISTORY = deque(maxlen=50) # Keeps last 50 results
 
 currentbankroll = 10000.0 
 last_prediction = {"issue": None, "label": "WAITING", "stake": 0, "conf": 0, "level": "---"}
 last_win_status = "NONE"
 
-# --- 4. UI BRIDGE FUNCTION (FIXED) ---
-# We added 'timer_val' here so the UI knows how many seconds are left
+# STATS TRACKING
+session_wins = 0
+session_losses = 0
+
+# --- 4. UI BRIDGE FUNCTION ---
 def update_dashboard(status_text="IDLE", timer_val=0):
+    # Calculate accuracy
+    total_played = session_wins + session_losses
+    accuracy_str = "0%"
+    if total_played > 0:
+        acc = (session_wins / total_played) * 100
+        accuracy_str = f"{acc:.0f}%"
+
     data = {
         "period": last_prediction['issue'] if last_prediction['issue'] else "---",
         "prediction": last_prediction['label'],
@@ -67,12 +73,17 @@ def update_dashboard(status_text="IDLE", timer_val=0):
         "bankroll": currentbankroll,
         "lastresult_status": last_win_status,
         "status_text": status_text,
-        "timer": timer_val,  # <--- THIS WAS MISSING
+        "timer": timer_val,
+        # STATS BLOCK for Server.py to read
+        "stats": {
+            "wins": session_wins,
+            "losses": session_losses,
+            "accuracy": accuracy_str
+        },
         "history": list(UI_HISTORY),
         "timestamp": time.time()
     }
     try:
-        # Atomic write to prevent reading half-written files
         with open(DASHBOARD_FILE + ".tmp", "w") as f:
             json.dump(data, f)
         os.replace(DASHBOARD_FILE + ".tmp", DASHBOARD_FILE)
@@ -143,10 +154,10 @@ async def fetch_latest_data(session):
 
 # --- 7. MAIN LOOP ---
 async def main_loop():
-    global currentbankroll, last_prediction, last_win_status
+    global currentbankroll, last_prediction, last_win_status, session_wins, session_losses
     
     print("================================================================")
-    print("   TITAN V500 - UI SERVER CONNECTED (TIMER FIXED)")
+    print("   TITAN V500 - BACKEND RUNNING (TIMER & STATS ACTIVE)")
     print("================================================================")
     
     last_processed_issue = None
@@ -156,7 +167,6 @@ async def main_loop():
         await load_initial_history()
         
         while True:
-            # Send 0 timer while fetching
             update_dashboard("FETCHING...", 0) 
             raw_list = await fetch_latest_data(session)
             
@@ -189,6 +199,7 @@ async def main_loop():
                             profit = stake * 0.98
                             currentbankroll += profit
                             last_win_status = "WIN"
+                            session_wins += 1 
                             UI_HISTORY.appendleft({
                                 "period": last_prediction['issue'],
                                 "pred": predicted,
@@ -199,6 +210,7 @@ async def main_loop():
                         else:
                             currentbankroll -= stake
                             last_win_status = "LOSS"
+                            session_losses += 1
                             UI_HISTORY.appendleft({
                                 "period": last_prediction['issue'],
                                 "pred": predicted,
@@ -211,7 +223,6 @@ async def main_loop():
                     next_issue = str(int(curr_issue) + 1)
                     print(f"[WAIT] Target: {next_issue}")
                     
-                    # This loop now pushes the 'i' value to the dashboard file
                     for i in range(TACTICAL_DELAY_SECONDS, 0, -1):
                         update_dashboard(f"WAITING... {i}s", i)
                         await asyncio.sleep(1)
