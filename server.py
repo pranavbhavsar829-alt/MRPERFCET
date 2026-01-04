@@ -14,13 +14,13 @@ import asyncio
 from datetime import datetime, timedelta
 from database_handler import create_connection, DB_PATH, ensure_setup, cleanup_inactive_sessions
 
-# --- IMPORT FETCHER TO RUN IT AUTOMATICALLY ---
+# --- IMPORT FETCHER TO RUN AUTOMATICALLY ---
 import fetcher
 
 app = Flask(__name__)
 app.secret_key = "TITAN_SECURE_KEY_CHANGE_THIS" 
 ADMIN_PASSWORD = "admin" 
-OFFLINE_SECRET = "TITAN_OFFLINE_SECRET_CODE_123" 
+OFFLINE_SECRET = "TITAN_OFFLINE_SECRET_CODE_123" # Must match local_generator.py
 MASTER_KEY = "TITAN-PERM-ADMIN" 
 
 DASHBOARD_FILE = os.path.join(DB_PATH, 'dashboard_data.json')
@@ -38,7 +38,6 @@ ensure_tables()
 # --- BACKGROUND WORKER (The "Always Online" Fix) ---
 def start_fetcher_loop():
     """Starts the predictor in a background thread."""
-    # Create a new event loop for this thread
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     print("[SYSTEM] Auto-Starting Titan Predictor Engine...")
@@ -47,7 +46,7 @@ def start_fetcher_loop():
     except Exception as e:
         print(f"[CRITICAL ERROR] Fetcher crashed: {e}")
 
-# Only start the thread once (prevents duplicates during Flask reload)
+# Only start the thread once
 if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
     t = threading.Thread(target=start_fetcher_loop, daemon=True)
     t.start()
@@ -67,7 +66,7 @@ def admin_required(f):
         return f(*args, **kwargs)
     return wrapped
 
-# --- KEY VERIFICATION ---
+# --- KEY VERIFICATION (OFFLINE + ONLINE) ---
 def is_key_blacklisted(key):
     conn = create_connection()
     row = conn.execute("SELECT * FROM blacklisted_keys WHERE key_code = ?", (key,)).fetchone()
@@ -116,7 +115,7 @@ def validate_key_and_login(key_input):
             return True, "OK"
         else: return False, msg
 
-    # 2. Database Check
+    # 2. Database Check (Legacy)
     conn = create_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM access_keys WHERE key_code = ? AND is_active = 1", (key_input,))
