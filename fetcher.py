@@ -1,8 +1,7 @@
 """
-TITAN V700 - SOVEREIGN FETCHER ENGINE (V2026.6 - OCTET-STREAM FIX)
+TITAN V700 - SOVEREIGN FETCHER ENGINE (V2026.9 - FULL PRODUCTION FIX)
 ================================================================
-A highly robust, asynchronous data acquisition layer designed to 
-synchronize with the draw.ar-lottery01.com API.
+Integrated with Mimetype Fix, Warmup Logic, and Server-Loop Sync.
 ================================================================
 """
 
@@ -26,15 +25,16 @@ logger = logging.getLogger("TITAN_FETCHER")
 # --- CORE SYSTEM ENGINE IMPORT ---
 try:
     from prediction_engine import ultraAIPredict
-    # Integrating helper functions if available in your prediction_engine
+    
     def get_outcome_from_number(n):
+        """Standard WinGo mapping: 0-4 Small, 5-9 Big."""
         try:
             val = int(float(n))
             return "SMALL" if 0 <= val <= 4 else "BIG"
         except: return None
     logger.info("Logic Engine (TITAN V700) linked successfully.")
 except ImportError as e:
-    logger.critical(f"FATAL: Prediction engine missing! Details: {e}")
+    logger.critical(f"FATAL: prediction_engine.py missing! Details: {e}")
     sys.exit(1)
 
 # --- API CONFIGURATION ---
@@ -43,18 +43,22 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://draw.ar-lottery01.com",
-    "Referer": "https://draw.ar-lottery01.com/",
-    "Connection": "keep-alive"
+    "Referer": "https://draw.ar-lottery01.com/"
 }
 
-# --- PERSISTENT STORAGE PATHS ---
-BASE_STORAGE_PATH = os.path.abspath(os.path.dirname(__file__))
+# --- PERSISTENT STORAGE PATHS (RENDER COMPATIBLE) ---
+if os.path.exists('/var/lib/data'):
+    BASE_STORAGE_PATH = '/var/lib/data'
+else:
+    BASE_STORAGE_PATH = os.path.abspath(os.path.dirname(__file__))
+
 DB_FILE = os.path.join(BASE_STORAGE_PATH, 'ar_lottery_history.db')
 DASHBOARD_PATH = os.path.join(BASE_STORAGE_PATH, 'dashboard_data.json')
 
 # --- OPERATIONAL PARAMETERS ---
 HISTORY_RETENTION_LIMIT = 2000
-MIN_BRAIN_CAPACITY = 10   
+WARMUP_TARGET = 50        
+MIN_BRAIN_CAPACITY = 40   # Engines like 'reversion' need this much data
 LIVE_POLL_INTERVAL = 2.0  
 
 # --- SHARED GLOBAL STATE ---
@@ -68,7 +72,7 @@ class FetcherState:
         self.last_processed_issue = None
         self.active_prediction = {
             "issue": None, "label": "WAITING", "stake": 0, "conf": 0,
-            "level": "---", "reason": "Initializing system...", "strategy": "BOOTING"
+            "level": "---", "reason": "System Warming Up...", "strategy": "WARMUP"
         }
         self.last_win_status = "NONE"
 
@@ -79,7 +83,7 @@ state = FetcherState()
 # =============================================================================
 
 def ensure_db_setup():
-    """Initializes SQLite to ensure data persists across script restarts."""
+    """Initializes SQLite to ensure data persists across restarts."""
     conn = sqlite3.connect(DB_FILE)
     conn.execute('''CREATE TABLE IF NOT EXISTS results 
                     (issue TEXT PRIMARY KEY, code INTEGER, fetch_time TEXT)''')
@@ -87,7 +91,7 @@ def ensure_db_setup():
     conn.close()
 
 async def save_to_db(issue: str, code: int):
-    """Saves a new record to the local SQLite database."""
+    """Saves records to SQLite."""
     try:
         conn = sqlite3.connect(DB_FILE)
         conn.execute("INSERT OR IGNORE INTO results (issue, code, fetch_time) VALUES (?, ?, ?)", 
@@ -98,7 +102,7 @@ async def save_to_db(issue: str, code: int):
         logger.error(f"DB Save Error: {e}")
 
 async def load_db_to_ram():
-    """Loads historical data from DB into RAM for the AI engine."""
+    """Loads history from DB into RAM and returns the record count."""
     state.ram_history.clear()
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -114,11 +118,11 @@ async def load_db_to_ram():
         return 0
 
 # =============================================================================
-# UI & ENGINE SYNC
+# UI & DASHBOARD SYNC
 # =============================================================================
 
 async def sync_dashboard(status: str, timer: int):
-    """Updates the JSON bridge file for server.py."""
+    """Updates the JSON file consumed by server.py."""
     total = state.wins + state.losses
     acc = f"{(state.wins / total) * 100:.1f}%" if total > 0 else "0.0%"
     
@@ -150,14 +154,11 @@ async def sync_dashboard(status: str, timer: int):
 # NETWORK LAYER
 # =============================================================================
 
-async def execute_api_fetch(session: aiohttp.ClientSession, limit: int) -> List[Dict]:
-    """
-    Fetches data using GET.
-    CRITICAL FIX: content_type=None allows decoding 'application/octet-stream'.
-    """
+async def execute_api_fetch(session: aiohttp.ClientSession, limit: int, page=1) -> List[Dict]:
+    """Fetches data using GET with octet-stream decoding fix."""
     params = {
         "pageSize": limit,
-        "pageNo": 1,
+        "pageNo": page,
         "typeId": 1,
         "language": 0,
         "timestamp": int(time.time() * 1000)
@@ -166,7 +167,7 @@ async def execute_api_fetch(session: aiohttp.ClientSession, limit: int) -> List[
     try:
         async with session.get(TARGET_URL, headers=HEADERS, params=params, timeout=10) as response:
             if response.status == 200:
-                # content_type=None bypasses the mimetype validation error
+                # content_type=None bypasses strict mimetype checking
                 json_data = await response.json(content_type=None)
                 return json_data.get('data', {}).get('list', []) or json_data.get('list', [])
             else:
@@ -177,61 +178,73 @@ async def execute_api_fetch(session: aiohttp.ClientSession, limit: int) -> List[
     return []
 
 # =============================================================================
-# MAIN OPERATIONAL LOOP
+# MAIN OPERATIONAL LOOP (Renamed to main_loop for server.py compatibility)
 # =============================================================================
 
-async def run_fetcher_engine():
-    """Main loop for data synchronization and AI prediction."""
+async def main_loop():
+    """Main loop for server-side integration."""
     ensure_db_setup()
-    await load_db_to_ram()
-    
-    logger.info(f"--- TITAN V700 STARTED | {len(state.ram_history)} RECORDS LOADED ---")
+    current_count = await load_db_to_ram()
     
     async with aiohttp.ClientSession() as session:
+        
+        # --- PHASE 1: FORCED WARMUP SYNC ---
+        if current_count < WARMUP_TARGET:
+            logger.info(f"[WARMUP] Current data: {current_count}. Syncing {WARMUP_TARGET} records...")
+            for p in range(1, 6): # Fetch up to 5 pages
+                await sync_dashboard(f"WARMUP: PAGE {p}", 0)
+                batch = await execute_api_fetch(session, 20, page=p)
+                if batch:
+                    for item in batch:
+                        iss = str(item.get('issueNumber') or item.get('issue'))
+                        num = int(item.get('number') or item.get('result'))
+                        await save_to_db(iss, num)
+                
+                current_count = await load_db_to_ram()
+                if current_count >= WARMUP_TARGET:
+                    break
+            logger.info(f"[WARMUP] Completed. Memory size: {current_count}")
+
+        logger.info(f"--- TITAN V700 LIVE MONITORING ACTIVE ---")
+        
         while True:
             raw_list = await execute_api_fetch(session, 10)
             
             if raw_list:
-                # 1. Update Database and RAM with any new rounds in the batch
+                # Sync any missed rounds into memory
                 for item in reversed(raw_list):
                     iss = str(item.get('issueNumber') or item.get('issue'))
                     num = int(item.get('number') or item.get('result'))
-                    
                     if not any(d['issue'] == iss for d in state.ram_history):
                         await save_to_db(iss, num)
                         state.ram_history.append({'issue': iss, 'actual_number': num})
-                        logger.info(f"[DATABASE] Stored Round {iss}")
 
-                # 2. Process Latest Round
                 latest = raw_list[0]
                 curr_issue = str(latest.get('issueNumber') or latest.get('issue'))
                 curr_num = int(latest.get('number') or latest.get('result'))
                 
                 seconds_remaining = 60 - datetime.now().second
-                await sync_dashboard("LIVE", seconds_remaining)
+                await sync_dashboard("LIVE SYNCED", seconds_remaining)
                 
                 if curr_issue != state.last_processed_issue:
-                    logger.info(f"[NEW ROUND] {curr_issue} | Result: {curr_num}")
+                    logger.info(f"[NEW DATA] {curr_issue} Result: {curr_num}")
                     
-                    # 3. Verify Previous Prediction Result
+                    # Verify Prediction Accuracy
                     if state.active_prediction['issue'] == curr_issue:
                         real_outcome = get_outcome_from_number(curr_num)
                         pred_label = state.active_prediction['label']
-                        
                         if pred_label not in ["WAITING", "SKIP"]:
                             win = (pred_label == real_outcome)
                             state.last_win_status = "WIN" if win else "LOSS"
                             if win: state.wins += 1
                             else: state.losses += 1
-                            
-                            state.ui_history.appendleft({
-                                "period": curr_issue, "pred": pred_label, "result": state.last_win_status
-                            })
+                            state.ui_history.appendleft({"period": curr_issue, "pred": pred_label, "result": state.last_win_status})
 
-                    # 4. Generate Next Prediction
+                    # Run Engine Prediction (Requires 40+ Records)
                     if len(state.ram_history) >= MIN_BRAIN_CAPACITY:
                         next_issue = str(int(curr_issue) + 1)
                         try:
+                            # ultraAIPredict call
                             ai_output = ultraAIPredict(list(state.ram_history), state.bankroll, get_outcome_from_number(curr_num))
                             state.active_prediction = {
                                 "issue": next_issue,
@@ -239,11 +252,13 @@ async def run_fetcher_engine():
                                 "stake": ai_output['positionsize'],
                                 "conf": ai_output['confidence'],
                                 "level": ai_output['level'],
-                                "reason": ai_output.get('reason', 'Analyzing patterns...')
+                                "reason": ai_output.get('reason', 'Processing signals...')
                             }
-                            logger.info(f"[AI] Target: {next_issue} | Decision: {ai_output['finalDecision']}")
+                            logger.info(f"[TITAN] Target: {next_issue} | Signal: {ai_output['finalDecision']}")
                         except Exception as e:
-                            logger.error(f"Engine Error: {e}")
+                            logger.error(f"Logic Engine Error: {e}")
+                    else:
+                        logger.warning(f"[BUFFER] Data {len(state.ram_history)}/40. Engines waiting.")
                     
                     state.last_processed_issue = curr_issue
             
@@ -253,6 +268,6 @@ if __name__ == '__main__':
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
-        asyncio.run(run_fetcher_engine())
+        asyncio.run(main_loop())
     except KeyboardInterrupt:
         logger.info("Shutdown requested.")
