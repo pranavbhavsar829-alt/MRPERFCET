@@ -38,7 +38,7 @@ except ImportError as e:
     sys.exit(1)
 
 # --- API CONFIGURATION ---
-TARGET_URL = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json"
+TARGET_URL = "https://api-wo4u.onrender.com/api/get_history"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
