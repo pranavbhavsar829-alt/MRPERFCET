@@ -3,53 +3,49 @@
 """
 =============================================================================
 
-TITAN LITE V3 – SPECIAL FORCES + META ENGINES + REGIME BRAIN (FULL EXPANDED)
+TITAN LITE V3 – META ENGINES + REGIME BRAIN (FULL EXPANDED, NO VISUAL ENGINE)
 
 PHILOSOPHY: "Speed, Precision & Depth"
 
-ACTIVE ENGINES:
+ACTIVE ENGINES (ALL META):
 
-1. PATTERN SNIPER (Visual)
-   - Detects ZigZags, Mirrors, Double Pairs, and Dragons.
-   - Explicit rules for both BIG and SMALL.
-
-2. MIRROR_PATTERN (Meta)
+1. MIRROR_PATTERN (Meta)
    - Digit-level mirror symmetry analysis on recent window.
 
-3. CLUSTER_DOMINANCE (Meta)
+2. CLUSTER_DOMINANCE (Meta)
    - Detects dominant value / range clusters and entropy.
 
-4. FREQUENCY_REVERSION (Meta)
+3. FREQUENCY_REVERSION (Meta)
    - Long-term vs short-term frequency imbalance & z-score.
 
-5. SEQUENCE_TREND (Meta)
+4. SEQUENCE_TREND (Meta)
    - Short-term directional trend on raw numbers.
 
-6. MOMENTUM_ANALYSIS (Meta)
+5. MOMENTUM_ANALYSIS (Meta)
    - Strength of recent BIG/SMALL momentum and streak.
 
-7. PERIOD_PARITY (Meta)
+6. PERIOD_PARITY (Meta)
    - Even/odd bias, modular cycles, and micro-periodicity.
 
-8. VOLATILITY_REGIME (Meta)
+7. VOLATILITY_REGIME (Meta)
    - Classifies regime: CALM / NORMAL / EXPLOSIVE from volatility.
 
-9. STREAK_STRUCTURE (Meta)
+8. STREAK_STRUCTURE (Meta)
    - Compares current streak to typical streak distribution.
 
-10. LOCAL_GRAMMAR (Meta)
-    - Token-level transitions on BB / SS / BS / SB.
+9. LOCAL_GRAMMAR (Meta)
+   - Token-level transitions on BB / SS / BS / SB.
 
-11. ENTROPY_GUARD (Meta)
+10. ENTROPY_GUARD (Meta)
     - Shannon entropy of recent patterns; reduces bets when too random.
 
-12. CONSENSUS_INDEX (Meta)
+11. CONSENSUS_INDEX (Meta)
     - Aggregates all engines into a single signed index in [-1,1].
 
 LOGIC FLOW (SUMMARY):
 
-- Pattern Sniper is the only "base" directional engine.
-- All other engines vote with weights; a consensus index combines them.
+- No dedicated "visual" base engine; direction comes from meta engines only.
+- Meta engines vote with weights; a consensus index combines them.
 - Volatility + Entropy adjust how aggressive we bet.
 - If consensus weak or entropy too high → SKIP.
 - If consensus strong and regime favorable → FIRE with scaled size.
@@ -98,16 +94,17 @@ class RiskConfig:
     REQ_CONFIDENCE = 0.80  # base
 
     # BETTING LIMITS
-    BASE_RISK_PERCENT = 0.08  # 8% of Bankroll
+    # Slightly safer base risk for 3-level ladder
+    BASE_RISK_PERCENT = 0.05  # 5% of Bankroll
     MIN_BET_AMOUNT = 10
     MAX_BET_AMOUNT = 50000
 
-    # RECOVERY SYSTEM
+    # RECOVERY SYSTEM (softer than 1.0 / 2.2 / 5.0)
     LEVEL_1_MULT = 1.0
-    LEVEL_2_MULT = 2.2
-    LEVEL_3_MULT = 5.0
+    LEVEL_2_MULT = 1.7
+    LEVEL_3_MULT = 2.7
 
-    # STOP LOSS
+    # STOP LOSS – max 3 consecutive losses per ladder
     STOP_LOSS_STREAK = 3
 
 
@@ -183,66 +180,10 @@ def shannon_entropy(probs: List[float]) -> float:
 
 
 # =============================================================================
-# [PART 3] ENGINE 1: PATTERN SNIPER (THE VISUAL BRAIN)
+# [PART 3] META ENGINES (ORIGINAL 6)
 # =============================================================================
 
-class PatternEngine:
-
-    @staticmethod
-    def scan(history: List[Dict]) -> Optional[Dict]:
-        """
-        Scans for specific visual patterns in BIG/SMALL.
-        """
-        full_seq = get_history_string(history, 24)
-        if len(full_seq) < 10:
-            return None
-
-        # BIG patterns
-        if full_seq.endswith("BSBSBS"):
-            return {'prediction': GameConstants.BIG, 'weight': 1.2, 'source': 'Sniper-ZigZag'}
-
-        if full_seq.endswith("BBSS"):
-            return {'prediction': GameConstants.BIG, 'weight': 1.2, 'source': 'Sniper-2A2B'}
-
-        if full_seq.endswith("SSBSS"):
-            return {'prediction': GameConstants.BIG, 'weight': 1.3, 'source': 'Sniper-Mirror'}
-
-        if full_seq.endswith("BBBB"):
-            return {'prediction': GameConstants.BIG, 'weight': 1.4, 'source': 'Sniper-Dragon'}
-
-        if full_seq.endswith("BBBSSS"):
-            return {'prediction': GameConstants.BIG, 'weight': 1.1, 'source': 'Sniper-3-3-Block'}
-
-        if full_seq.endswith("SSB"):
-            return {'prediction': GameConstants.BIG, 'weight': 1.0, 'source': 'Sniper-Pair-Fix'}
-
-        # SMALL patterns
-        if full_seq.endswith("SBSBSB"):
-            return {'prediction': GameConstants.SMALL, 'weight': 1.2, 'source': 'Sniper-ZigZag'}
-
-        if full_seq.endswith("SSBB"):
-            return {'prediction': GameConstants.SMALL, 'weight': 1.2, 'source': 'Sniper-2A2B'}
-
-        if full_seq.endswith("BBSBB"):
-            return {'prediction': GameConstants.SMALL, 'weight': 1.3, 'source': 'Sniper-Mirror'}
-
-        if full_seq.endswith("SSSS"):
-            return {'prediction': GameConstants.SMALL, 'weight': 1.4, 'source': 'Sniper-Dragon'}
-
-        if full_seq.endswith("SSSBBB"):
-            return {'prediction': GameConstants.SMALL, 'weight': 1.1, 'source': 'Sniper-3-3-Block'}
-
-        if full_seq.endswith("BBS"):
-            return {'prediction': GameConstants.SMALL, 'weight': 1.0, 'source': 'Sniper-Pair-Fix'}
-
-        return None
-
-
-# =============================================================================
-# [PART 4] META ENGINES (YOUR 6 ORIGINAL NEW LOGICS)
-# =============================================================================
-
-# 4.1 MIRROR_PATTERN – Mirror number analysis
+# 3.1 MIRROR_PATTERN – Mirror number analysis
 def engine_mirror_pattern(history: List[Dict]) -> Optional[Dict]:
     """
     Digit-level mirror symmetry feature on last 20 points.
@@ -295,7 +236,7 @@ def engine_mirror_pattern(history: List[Dict]) -> Optional[Dict]:
     return None
 
 
-# 4.2 CLUSTER_DOMINANCE – Cluster size analysis
+# 3.2 CLUSTER_DOMINANCE – Cluster size analysis
 def engine_cluster_dominance(history: List[Dict]) -> Optional[Dict]:
     """
     Cluster dominance on last 40 numbers using low/mid/high buckets.
@@ -333,7 +274,7 @@ def engine_cluster_dominance(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 4.3 FREQUENCY_REVERSION – Statistical reversion
+# 3.3 FREQUENCY_REVERSION – Statistical reversion
 def engine_frequency_reversion(history: List[Dict]) -> Optional[Dict]:
     """
     Long-term vs short-term frequency imbalance on BIG/SMALL.
@@ -380,7 +321,7 @@ def engine_frequency_reversion(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 4.4 SEQUENCE_TREND – Pattern continuation
+# 3.4 SEQUENCE_TREND – Pattern continuation
 def engine_sequence_trend(history: List[Dict]) -> Optional[Dict]:
     """
     Simple linear trend on last 20 numbers.
@@ -423,7 +364,7 @@ def engine_sequence_trend(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 4.5 MOMENTUM_ANALYSIS – Directional momentum
+# 3.5 MOMENTUM_ANALYSIS – Directional momentum
 def engine_momentum(history: List[Dict]) -> Optional[Dict]:
     """
     Momentum using binary +1/-1 sequence and streak.
@@ -462,7 +403,7 @@ def engine_momentum(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 4.6 PERIOD_PARITY – Mathematical properties
+# 3.6 PERIOD_PARITY – Mathematical properties
 def engine_period_parity(history: List[Dict]) -> Optional[Dict]:
     """
     Combines parity bias, residue cycle, and small-period repetition.
@@ -520,10 +461,10 @@ def engine_period_parity(history: List[Dict]) -> Optional[Dict]:
 
 
 # =============================================================================
-# [PART 5] NEW META ENGINES (5 EXTRA)
+# [PART 4] NEW META ENGINES (5 EXTRA)
 # =============================================================================
 
-# 5.1 VOLATILITY_REGIME – calm / normal / explosive
+# 4.1 VOLATILITY_REGIME – calm / normal / explosive
 def engine_volatility_regime(history: List[Dict]) -> Optional[Dict]:
     """
     Detect volatility regime using std over short vs long windows.
@@ -560,7 +501,7 @@ def engine_volatility_regime(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 5.2 STREAK_STRUCTURE – typical vs current streak
+# 4.2 STREAK_STRUCTURE – typical vs current streak
 def engine_streak_structure(history: List[Dict]) -> Optional[Dict]:
     """
     Compare current streak length with typical streak distribution.
@@ -574,7 +515,7 @@ def engine_streak_structure(history: List[Dict]) -> Optional[Dict]:
     if len(labels) < 40:
         return None
 
-    # compute distribution of streak lengths up to some cap
+    # compute distribution of streak lengths
     streak_lens: List[int] = []
     cur = labels[0]
     run = 1
@@ -605,18 +546,15 @@ def engine_streak_structure(history: List[Dict]) -> Optional[Dict]:
     # If current streak much longer than typical, fade the streak.
     # If shorter or around avg, follow it (continuation).
     if cur_run >= max(3, avg_streak + 1.5):
-        # fade
         if last_lab == GameConstants.BIG:
             pred = GameConstants.SMALL
         else:
             pred = GameConstants.BIG
         mode = "FADE"
     else:
-        # follow
         pred = last_lab
         mode = "FOLLOW"
 
-    # Weight scales with how extreme the streak is
     extremeness = abs(cur_run - avg_streak) / max(1.0, avg_streak)
     weight = min(0.9, 0.4 + 0.3 * extremeness)
 
@@ -627,7 +565,7 @@ def engine_streak_structure(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 5.3 LOCAL_GRAMMAR – token transitions BB/SS/BS/SB
+# 4.3 LOCAL_GRAMMAR – token transitions BB/SS/BS/SB
 def engine_local_grammar(history: List[Dict]) -> Optional[Dict]:
     """
     Build simple token transitions over pairs of BIG/SMALL.
@@ -686,7 +624,7 @@ def engine_local_grammar(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 5.4 ENTROPY_GUARD – randomness detector
+# 4.4 ENTROPY_GUARD – randomness detector
 def engine_entropy_guard(history: List[Dict]) -> Optional[Dict]:
     """
     Estimate randomness using entropy of BIG/SMALL sequence.
@@ -696,16 +634,11 @@ def engine_entropy_guard(history: List[Dict]) -> Optional[Dict]:
     if len(seq) < 10:
         return None
 
-    # probabilities of B and S
     total = len(seq)
     pB = seq.count("B") / total
     pS = seq.count("S") / total
     ent = shannon_entropy([pB, pS])  # max = 1 when pB=pS=0.5
 
-    # treat entropy in [0,1]
-    # low entropy (<0.6) -> structured, high risk allowed
-    # medium (0.6-0.9) -> normal
-    # high (>0.9) -> random, lower risk
     if ent < 0.6:
         risk_factor = 1.0
         mode = "STRUCTURED"
@@ -726,7 +659,7 @@ def engine_entropy_guard(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-# 5.5 CONSENSUS_INDEX – aggregated vote
+# 4.5 CONSENSUS_INDEX – aggregated vote
 def compute_consensus_index(signals: List[Dict[str, Any]], base_side: Optional[str]) -> float:
     """
     Compute a signed consensus index in [-1,1]:
@@ -747,10 +680,8 @@ def compute_consensus_index(signals: List[Dict[str, Any]], base_side: Optional[s
     if total <= 0:
         return 0.0
 
-    # index in [-1,1]
     ci = (big_score - small_score) / total
 
-    # optional small bias toward base side
     if base_side == GameConstants.BIG:
         ci = min(1.0, ci + 0.05)
     elif base_side == GameConstants.SMALL:
@@ -760,7 +691,7 @@ def compute_consensus_index(signals: List[Dict[str, Any]], base_side: Optional[s
 
 
 # =============================================================================
-# [PART 6] STATE MANAGER (MEMORY)
+# [PART 5] STATE MANAGER (MEMORY)
 # =============================================================================
 
 class GlobalStateManager:
@@ -774,7 +705,7 @@ state_manager = GlobalStateManager()
 
 
 # =============================================================================
-# [PART 7] MAIN EXECUTION CONTROLLER
+# [PART 6] MAIN EXECUTION CONTROLLER
 # =============================================================================
 
 def ultraAIPredict(
@@ -811,10 +742,7 @@ def ultraAIPredict(
 
     # --- STEP 2: RUN ENGINES ---
 
-    # Base visual engine
-    s_patt = PatternEngine.scan(history)
-
-    # Original 6 meta engines
+    # Core meta engines
     meta_engines_core = [
         engine_mirror_pattern,
         engine_cluster_dominance,
@@ -840,13 +768,6 @@ def ultraAIPredict(
     entropy_signal = engine_entropy_guard(history)
 
     signals: List[Dict[str, Any]] = []
-    if s_patt:
-        signals.append({
-            'prediction': s_patt['prediction'],
-            'weight': s_patt.get('weight', 1.0),
-            'source': s_patt['source']
-        })
-
     signals.extend(meta_signals)
 
     # add new ones that have predictions
@@ -866,41 +787,34 @@ def ultraAIPredict(
             'topsignals': []
         }
 
-    # --- STEP 4: BASE CANDIDATE (PATTERN OR META) ---
+    # --- STEP 4: BASE CANDIDATE (META ONLY) ---
     base_candidate: Optional[str] = None
     base_conf = 0.0
     base_reason = ""
 
-    if s_patt:
-        base_candidate = s_patt['prediction']
-        base_conf = 0.85
-        base_reason = f"Visual: {s_patt['source']}"
-    else:
-        # meta-only candidate: majority vote among all meta engines
-        vote_score: Dict[str, float] = {}
-        for s in signals:
-            pred = s.get('prediction', None)
-            if pred in (GameConstants.BIG, GameConstants.SMALL):
-                w = float(s.get('weight', 0.5))
-                vote_score[pred] = vote_score.get(pred, 0.0) + w
+    vote_score: Dict[str, float] = {}
+    for s in signals:
+        pred = s.get('prediction', None)
+        if pred in (GameConstants.BIG, GameConstants.SMALL):
+            w = float(s.get('weight', 0.5))
+            vote_score[pred] = vote_score.get(pred, 0.0) + w
 
-        if not vote_score:
-            return {
-                'finalDecision': "SKIP",
-                'confidence': 0,
-                'positionsize': 0,
-                'level': "WAIT",
-                'reason': "Meta engines inconclusive",
-                'topsignals': [s['source'] for s in signals]
-            }
+    if not vote_score:
+        return {
+            'finalDecision': "SKIP",
+            'confidence': 0,
+            'positionsize': 0,
+            'level': "WAIT",
+            'reason': "Meta engines inconclusive",
+            'topsignals': [s['source'] for s in signals]
+        }
 
-        base_candidate = max(vote_score, key=vote_score.get)
-        base_conf = min(0.9, 0.6 + vote_score[base_candidate] / 10.0)
-        base_reason = f"Meta Majority (votes={vote_score[base_candidate]:.2f})"
+    base_candidate = max(vote_score, key=vote_score.get)
+    base_conf = min(0.9, 0.6 + vote_score[base_candidate] / 10.0)
+    base_reason = f"Meta Majority (votes={vote_score[base_candidate]:.2f})"
 
     # --- STEP 5: CONSENSUS INDEX + BOOST ---
     consensus_index = compute_consensus_index(signals, base_candidate)
-    # consensus_index in [-1,1], magnitude = strength
     ci_mag = abs(consensus_index)
 
     # If consensus sign contradicts base_candidate strongly, SKIP (safety)
@@ -915,7 +829,6 @@ def ultraAIPredict(
             'topsignals': [s['source'] for s in signals]
         }
 
-    # align direction with base_candidate; consensus only boosts confidence
     base_boost = 0.15 * ci_mag
     final_conf = max(0.0, min(0.99, base_conf + base_boost))
 
@@ -960,13 +873,41 @@ def ultraAIPredict(
             'topsignals': [s['source'] for s in signals]
         }
 
-    # --- STEP 7: RISK MANAGEMENT & STOP LOSS ---
+    # --- STEP 7: EXTRA L2/L3 GATES (3-level safety logic) ---
+
+    # Level 2: only if consensus decent
+    if streak == 1:
+        if ci_mag < 0.5:
+            return {
+                'finalDecision': "SKIP",
+                'confidence': final_conf,
+                'positionsize': 0,
+                'level': "WAIT",
+                'reason': f"L2 blocked: weak consensus |CI|={ci_mag:.2f}",
+                'topsignals': [s['source'] for s in signals]
+            }
+
+    # Level 3: only if consensus very strong AND entropy not CHAOS
+    if streak == 2:
+        strong_ci = ci_mag > 0.7
+        safe_entropy = (not entropy_signal) or (entropy_signal.get('mode') != "CHAOS")
+        if (not strong_ci) or (not safe_entropy):
+            return {
+                'finalDecision': "SKIP",
+                'confidence': final_conf,
+                'positionsize': 0,
+                'level': "WAIT",
+                'reason': f"L3 blocked: CI/entropy guard (|CI|={ci_mag:.2f})",
+                'topsignals': [s['source'] for s in signals]
+            }
+
+    # --- STEP 8: RISK MANAGEMENT & STOP LOSS ---
 
     req_conf = RiskConfig.REQ_CONFIDENCE
     if streak == 1:
-        req_conf = 0.85
+        req_conf = 0.94   # stricter L2
     elif streak == 2:
-        req_conf = 0.92
+        req_conf = 0.98   # very strict L3
     elif streak >= RiskConfig.STOP_LOSS_STREAK:
         return {
             'finalDecision': "SKIP",
@@ -1020,9 +961,9 @@ def ultraAIPredict(
 
 
 # =============================================================================
-# [PART 8] SYSTEM BOOT
+# [PART 7] SYSTEM BOOT
 # =============================================================================
 
 if __name__ == "__main__":
-    print("TITAN LITE V3 (PATTERN + 11 META ENGINES) ONLINE.")
-    print("Strategy: Visual + 6 Core Meta + Volatility + Streak + Grammar + Entropy + Consensus.")
+    print("TITAN LITE V3 (META ENGINES ONLY) ONLINE.")
+    print("Strategy: 6 Core Meta + Volatility + Streak + Grammar + Entropy + Consensus + 3-Level Safety Ladder.")
