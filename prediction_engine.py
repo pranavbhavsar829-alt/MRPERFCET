@@ -1,12 +1,25 @@
-"""
-TITAN V900 - OMNI-SNIPER PREDICTION ARCHITECT
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+r"""
 ================================================================================
-SYSTEM ARCHITECTURE:
-1. CHAOS FILTER: Rejects markets with High Entropy (Randomness).
-2. TITAN MEMORY: Internal state tracking to prevent "Ghost Losses".
-3. TRIDENT ENGINES: Legacy Logic (Quantum, Deep Pattern, Neural).
-4. OMNI-PATTERN: Visual Recognition (Dragon, 1A1B, Mirrors).
-5. SNIPER GATES: 3-Stage Confirmation System for 100% Win Strategy.
+  _______ _____ _______ _    _  _   _ 
+ |__   __|_   _|__   __| |  | || \ | |
+    | |    | |    | |  | |  | ||  \| |
+    | |    | |    | |  | |  | || . ` |
+    | |   _| |_   | |  | |__| || |\  |
+    |_|  |_____|  |_|   \____/ |_| \_|
+                                      
+  TITAN V2000 - THE SINGULARITY EDITION (MERGED ARCHITECTURE)
+  ------------------------------------------------------------------------------
+  COMBINED SYSTEMS: 
+    - Titan V302 (Neural, Entropy, Regime Analysis)
+    - Titan V1000 (Hyper-Flux, 4-Trend Dragon, True Memory)
+  
+  LOGIC:
+  This engine runs 5 simultaneous strategies (The Penta-Core) and uses 
+  V1000's Resonance logic to filter the V302 Neural signals.
+  
+  Risk Management: Aggressive Profit-Capture Martingale (1-3-7-15-35)
 ================================================================================
 """
 
@@ -14,63 +27,148 @@ import math
 import statistics
 import random
 import traceback
+import sys
+import time
 from collections import deque, Counter
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 
-# =============================================================================
-# SECTION 1: GLOBAL CONFIGURATION & IMMUTABLE CONSTANTS
-# =============================================================================
+# ==============================================================================
+# SECTION 1: GLOBAL CONFIGURATION & CONSTANTS
+# ==============================================================================
 
 class GameConstants:
-    """Core Game Definitions"""
+    """Immutable rules of the game."""
     BIG = "BIG"
     SMALL = "SMALL" 
     SKIP = "SKIP"
     
-    # Minimum data points required before engines engage
-    MIN_HISTORY_WARMUP = 35
-    
-    # Confidence Thresholds
-    CONFIDENCE_LEVEL_1 = 0.72  # Standard Entry
-    CONFIDENCE_LEVEL_2 = 0.85  # Recovery Entry
-    CONFIDENCE_LEVEL_3 = 0.95  # Sniper / All-in Warning
+    # Minimum history to start engines (Fast Start)
+    MIN_HISTORY_REQUIRED = 15
 
 class RiskConfig:
-    """Financial Risk Management Protocols"""
+    """
+    Unified Risk Protocol.
+    Combines V302's Aggression with V1000's Structure.
+    """
+    # --------------------------------------------------------------------------
+    # BANKROLL MANAGEMENT
+    # --------------------------------------------------------------------------
+    BASE_RISK_PERCENT = 0.01   # 1% of bankroll as base unit
+    MIN_BET_AMOUNT = 10.0
+    MAX_BET_AMOUNT = 50000.0
+    MAX_BANKROLL_USAGE = 0.60  # Never use more than 60% of wallet in one bet
     
-    # Base bet as a percentage of bankroll (0.01 = 1%)
-    BASE_RISK_PERCENT = 0.01    
+    # --------------------------------------------------------------------------
+    # MARTINGALE PROFIT LADDER (From V1000)
+    # Designed to recover previous losses AND profit.
+    # Level 0: 1x
+    # Level 1: 3x (Recovers 1 + Profit)
+    # Level 2: 7x (Recovers 4 + Profit)
+    # Level 3: 15x (Recovers 11 + Profit)
+    # Level 4: 35x (Recovers 26 + Profit)
+    # Level 5: 75x (Maximum Aggression)
+    # --------------------------------------------------------------------------
+    MARTINGALE_MULTIPLIERS = [1.0, 3.0, 7.0, 15.0, 35.0, 75.0]
     
-    # Hard limits
-    MIN_BET_AMOUNT = 10
-    MAX_BET_AMOUNT = 50000
-    MAX_BANKROLL_USAGE = 0.40  # Never bet more than 40% of total funds
+    # Safety Stop
+    MAX_CONSECUTIVE_LOSSES = 6
     
-    # --- ADVANCED MARTINGALE STEPS ---
-    # Multipliers for recovery.
-    # Step 0: Base Bet
-    # Step 1: 2.2x (Cover loss + Profit)
-    # Step 2: 5.0x (Deep Recovery)
-    # Step 3: 12.0x (Aggressive Defense)
-    # Step 4: 25.0x (The Wall - Do not cross)
-    MARTINGALE_MULTIPLIERS = [1.0, 2.2, 5.0, 12.0, 25.0] 
+    # --------------------------------------------------------------------------
+    # CONFIDENCE GATES
+    # --------------------------------------------------------------------------
+    # Entry level for standard trades
+    CONFIDENCE_LEVEL_1 = 0.58  # 58% (Aggressive Entry)
     
-    # Stop Loss Logic
-    STOP_LOSS_STREAK = 5       # Reset to base after 5 losses
+    # Entry level for recovery trades
+    CONFIDENCE_LEVEL_2 = 0.68  # 68% (Solid Signal)
     
-    # --- MARKET CHAOS FILTERS ---
-    # If the market flips (B->S->B) more than 65% of the time, we pause.
-    MAX_TRAP_INDEX = 0.65       
-    MIN_TREND_STRENGTH = 0.30   
+    # Entry level for Sniper/Max trades
+    CONFIDENCE_LEVEL_3 = 0.85  # 85% (Resonance Lock)
 
-# =============================================================================
-# SECTION 2: TITAN TRUE MEMORY (STATE MACHINE)
-# =============================================================================
+    # --------------------------------------------------------------------------
+    # MARKET FILTERS
+    # --------------------------------------------------------------------------
+    # If the market flips more than 80% of the time, we pause (Chaos Mode)
+    MAX_CHAOS_INDEX = 0.80
+
+# ==============================================================================
+# SECTION 2: ADVANCED MATHEMATICS & UTILITIES
+# ==============================================================================
+
+class MathUtils:
+    """
+    The Mathematical Core (Imported from V302).
+    """
+    @staticmethod
+    def safe_float(value: Any) -> float:
+        try:
+            if value is None: return 4.5
+            return float(value)
+        except (ValueError, TypeError):
+            return 4.5
+
+    @staticmethod
+    def get_outcome(n: Any) -> str:
+        val = int(MathUtils.safe_float(n))
+        if 0 <= val <= 4: return GameConstants.SMALL
+        if 5 <= val <= 9: return GameConstants.BIG
+        return GameConstants.SKIP
+
+    @staticmethod
+    def sigmoid(x: float) -> float:
+        """Neural Activation"""
+        try:
+            return 1.0 / (1.0 + math.exp(-x))
+        except OverflowError:
+            return 0.0 if x < 0 else 1.0
+
+    @staticmethod
+    def calculate_mean(data: List[float]) -> float:
+        return sum(data) / len(data) if data else 0.0
+
+    @staticmethod
+    def calculate_stddev(data: List[float]) -> float:
+        if len(data) < 2: return 0.0
+        return statistics.stdev(data)
+
+    @staticmethod
+    def calculate_rsi(data: List[float], period: int = 14) -> float:
+        if len(data) < period + 1: return 50.0
+        deltas = [data[i] - data[i-1] for i in range(1, len(data))]
+        gains = [d if d > 0 else 0 for d in deltas]
+        losses = [-d if d < 0 else 0 for d in deltas]
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+        if avg_loss == 0: return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    @staticmethod
+    def calculate_entropy(outcomes: List[str]) -> float:
+        """Shannon Entropy (0=Order, 1=Chaos)"""
+        if not outcomes: return 1.0
+        counts = Counter(outcomes)
+        total = len(outcomes)
+        entropy = 0.0
+        for count in counts.values():
+            p = count / total
+            if p > 0:
+                entropy -= p * math.log2(p)
+        return entropy
+
+# --- Compatibility Wrappers for Fetcher ---
+def safe_float(value): return MathUtils.safe_float(value)
+def get_outcome_from_number(n): return MathUtils.get_outcome(n)
+
+
+# ==============================================================================
+# SECTION 3: TITAN TRUE MEMORY (FROM V1000)
+# ==============================================================================
 
 class TitanMemory:
     """
-    Persistently tracks wins and losses in RAM to bypass API sync delays.
-    This ensures the bot knows EXACTLY what stage of Martingale it is in.
+    Persistently tracks wins/losses in RAM.
+    This prevents the bot from resetting its Martingale strategy if the API lags.
     """
     def __init__(self):
         self.last_predicted_issue: Optional[str] = None
@@ -78,458 +176,443 @@ class TitanMemory:
         self.loss_streak: int = 0
         self.wins: int = 0
         self.losses: int = 0
-        self.history_log: deque = deque(maxlen=100)
-        self.session_profit = 0.0
+        self.history_log: deque = deque(maxlen=200)
 
     def update_streak(self, latest_issue: str, latest_outcome: str):
-        """Called every new round to verify the previous prediction."""
-        # Only update if we actually have a pending bet for this issue
+        """Verifies if the last bet won or lost."""
         if str(latest_issue) == str(self.last_predicted_issue):
-            
             if self.last_predicted_label and self.last_predicted_label != GameConstants.SKIP:
                 if self.last_predicted_label == latest_outcome:
-                    # VICTORY
+                    # WIN
                     self.loss_streak = 0
                     self.wins += 1
                     self.history_log.append("W")
                 else:
-                    # DEFEAT
+                    # LOSS
                     self.loss_streak += 1
                     self.losses += 1
                     self.history_log.append("L")
             
-            # Reset prediction memory so we don't process the same issue twice
+            # Reset pending
             self.last_predicted_issue = None
             self.last_predicted_label = None
 
     def register_bet(self, target_issue: str, label: str):
-        """Registers a new pending bet."""
+        """Locks in a bet for the next round."""
         self.last_predicted_issue = target_issue
         self.last_predicted_label = label
-        
-    def get_accuracy(self) -> float:
-        if not self.history_log: return 0.0
-        wins = self.history_log.count("W")
-        return wins / len(self.history_log)
 
-# Initialize Global Memory
+# Initialize Single Global Memory
 titan_memory = TitanMemory()
 
-# =============================================================================
-# SECTION 3: MATHEMATICAL & STATISTICAL UTILITIES
-# =============================================================================
 
-def safe_float(value: Any) -> float:
-    """Robust float conversion."""
+# ==============================================================================
+# SECTION 4: MARKET REGIME ANALYZER (FROM V302)
+# ==============================================================================
+
+class MarketRegime:
+    """Analyzes the 'Texture' of the market (Trend vs Chop)."""
+    TRENDING = "TRENDING"
+    CHOPPY = "CHOPPY"
+    NEUTRAL = "NEUTRAL"
+    
+    @staticmethod
+    def analyze(history: List[Dict]) -> Dict[str, Any]:
+        if len(history) < 20:
+            return {"status": MarketRegime.NEUTRAL, "chop_index": 0.5}
+            
+        outcomes = [MathUtils.get_outcome(d['actual_number']) for d in history[-20:]]
+        outcomes = [o for o in outcomes if o != GameConstants.SKIP]
+        
+        if len(outcomes) < 2: return {"status": MarketRegime.NEUTRAL, "chop_index": 0.5}
+
+        # Calculate Alternations (Flips)
+        alternations = 0
+        for i in range(1, len(outcomes)):
+            if outcomes[i] != outcomes[i-1]:
+                alternations += 1
+                
+        max_alts = len(outcomes) - 1
+        chop_index = alternations / max_alts if max_alts > 0 else 0
+        
+        status = MarketRegime.NEUTRAL
+        if chop_index > 0.60:
+            status = MarketRegime.CHOPPY
+        elif chop_index < 0.40:
+            status = MarketRegime.TRENDING
+            
+        return {"status": status, "chop_index": chop_index}
+
+
+# ==============================================================================
+# SECTION 5: THE PENTA-CORE ENGINE SYSTEM
+# ==============================================================================
+
+class EngineResult:
+    def __init__(self, prediction: str, weight: float, source: str):
+        self.prediction = prediction
+        self.weight = weight
+        self.source = source
+
+# ------------------------------------------------------------------------------
+# CORE 1: QUANTUM VOLATILITY (V302)
+# ------------------------------------------------------------------------------
+def engine_quantum(history: List[Dict]) -> Optional[EngineResult]:
+    """Uses Bollinger Band logic to predict reversion."""
     try:
-        if value is None: return 4.5
-        return float(value)
-    except: return 4.5
+        numbers = [MathUtils.safe_float(d.get('actual_number')) for d in history[-30:]]
+        if len(numbers) < 20: return None
+        
+        mean = MathUtils.calculate_mean(numbers)
+        std = MathUtils.calculate_stddev(numbers)
+        if std == 0: return None
+        
+        current = numbers[-1]
+        z_score = (current - mean) / std
+        
+        # Aggressive Threshold (1.4 SD)
+        if z_score > 1.4:
+            return EngineResult(GameConstants.SMALL, 0.70, f"Quantum(High Z:{z_score:.1f})")
+        elif z_score < -1.4:
+            return EngineResult(GameConstants.BIG, 0.70, f"Quantum(Low Z:{z_score:.1f})")
+        return None
+    except: return None
 
-def get_outcome_from_number(n: Any) -> str:
-    """Converts raw number (0-9) to BIG/SMALL."""
+# ------------------------------------------------------------------------------
+# CORE 2: FRACTAL PATTERN V4 (V302)
+# ------------------------------------------------------------------------------
+def engine_pattern(history: List[Dict]) -> Optional[EngineResult]:
+    """Scans history for repeating sequences."""
     try:
-        val = int(safe_float(n))
-        return GameConstants.SMALL if 0 <= val <= 4 else GameConstants.BIG
-    except: return GameConstants.SKIP
+        if len(history) < 40: return None
+        outcomes = [MathUtils.get_outcome(d.get('actual_number')) for d in history]
+        raw = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o!=GameConstants.SKIP])
+        
+        best_prob = 0.0
+        best_pred = None
+        best_depth = 0
+        
+        # Scan depths 3 to 6
+        for depth in range(6, 2, -1):
+            if len(raw) < depth + 1: continue
+            curr = raw[-depth:]
+            search = raw[:-1]
+            
+            # Find history
+            b_count = 0
+            s_count = 0
+            start = 0
+            while True:
+                idx = search.find(curr, start)
+                if idx == -1: break
+                if idx + depth < len(search):
+                    nxt = search[idx + depth]
+                    if nxt == 'B': b_count += 1
+                    else: s_count += 1
+                start = idx + 1
+            
+            total = b_count + s_count
+            if total >= 3:
+                if b_count > s_count:
+                    prob = b_count/total
+                    pred = GameConstants.BIG
+                else:
+                    prob = s_count/total
+                    pred = GameConstants.SMALL
+                
+                if prob > best_prob and prob > 0.60:
+                    best_prob = prob
+                    best_pred = pred
+                    best_depth = depth
+                    
+        if best_pred:
+            weight = best_prob * (1.1 + (best_depth * 0.1))
+            return EngineResult(best_pred, weight, f"Pattern-D{best_depth}({best_prob:.0%})")
+        return None
+    except: return None
 
-def sigmoid(x: float) -> float:
-    """Neural Activation."""
+# ------------------------------------------------------------------------------
+# CORE 3: NEURAL PERCEPTRON (V302)
+# ------------------------------------------------------------------------------
+def engine_neural(history: List[Dict], regime: str) -> Optional[EngineResult]:
+    """Lightweight Neural Net using RSI and Momentum."""
     try:
-        return 1 / (1 + math.exp(-x))
-    except OverflowError:
-        return 0.0 if x < 0 else 1.0
-
-def calculate_rsi(data: List[float], period: int = 14) -> float:
-    """Relative Strength Index (RSI) Calculation."""
-    if len(data) < period + 1: return 50.0
-    
-    deltas = [data[i] - data[i-1] for i in range(1, len(data))]
-    gains = [d if d > 0 else 0 for d in deltas]
-    losses = [-d if d < 0 else 0 for d in deltas]
-    
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    
-    if avg_loss == 0: return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
-
-# =============================================================================
-# SECTION 4: DIAGNOSTIC ENGINES (CHAOS & MATH)
-# =============================================================================
-
-def engine_chaos_filter(history: List[Dict]) -> Tuple[bool, str]:
-    """
-    Analyzes Market Entropy.
-    Returns: (is_choppy: bool, reason: str)
-    """
-    if len(history) < 20: return False, "WARMUP"
-    
-    outcomes = [get_outcome_from_number(d['actual_number']) for d in history[-20:]]
-    
-    # 1. Calculate TRAP INDEX (Flip Rate)
-    # A flip is when the outcome changes (Big -> Small or Small -> Big)
-    flips = sum(1 for i in range(len(outcomes)-1) if outcomes[i] != outcomes[i+1])
-    trap_ratio = flips / (len(outcomes) - 1)
-    
-    # 2. Calculate MAX STREAK
-    current_streak = 1
-    max_streak = 1
-    for i in range(1, len(outcomes)):
-        if outcomes[i] == outcomes[i-1]:
-            current_streak += 1
+        numbers = [MathUtils.safe_float(d.get('actual_number')) for d in history[-45:]]
+        if len(numbers) < 20: return None
+        
+        # Inputs
+        rsi = MathUtils.calculate_rsi(numbers, 14)
+        norm_rsi = (rsi - 50) / 100.0
+        
+        sma_fast = MathUtils.calculate_mean(numbers[-5:])
+        sma_slow = MathUtils.calculate_mean(numbers[-20:])
+        momentum = (sma_fast - sma_slow) / 10.0
+        
+        # Weights (Adaptive)
+        if regime == MarketRegime.TRENDING:
+            w_rsi, w_mom = -0.5, 2.5
         else:
-            max_streak = max(max_streak, current_streak)
-            current_streak = 1
-    max_streak = max(max_streak, current_streak)
-
-    # 3. Decision Logic
-    # High Trap Ratio (>65%) means market is ping-ponging randomly.
-    if trap_ratio > RiskConfig.MAX_TRAP_INDEX:
-        return True, f"High Entropy ({trap_ratio:.0%} Flips)"
-    
-    # Low Streak (<3) + Moderate Trap (>50%) means noise.
-    if max_streak < 3 and trap_ratio > 0.50:
-        return True, "Noise / No Trend"
-        
-    return False, "Stable"
-
-def engine_math_reversion(history: List[Dict]) -> Optional[Dict]:
-    """
-    Uses Standard Deviation (Bollinger Logic) to find reversals.
-    """
-    try:
-        numbers = [safe_float(d['actual_number']) for d in history[-30:]]
-        if len(numbers) < 15: return None
-        
-        mean = statistics.mean(numbers)
-        stdev = statistics.pstdev(numbers)
-        if stdev == 0: return None
-        
-        last_val = numbers[-1]
-        z_score = (last_val - mean) / stdev
-        
-        # If Z-Score > 2.2, it is statistically overbought -> Expect Drop
-        if z_score > 2.2:
-            return {"pred": GameConstants.SMALL, "weight": 0.75, "src": "Math:Z-High"}
-        # If Z-Score < -2.2, it is statistically oversold -> Expect Rise
-        elif z_score < -2.2:
-            return {"pred": GameConstants.BIG, "weight": 0.75, "src": "Math:Z-Low"}
+            w_rsi, w_mom = -1.5, 1.0
             
-    except: pass
-    return None
-
-# =============================================================================
-# SECTION 5: PATTERN RECOGNITION ENGINES (VISUAL)
-# =============================================================================
-
-def engine_omni_patterns(history: List[Dict]) -> List[Dict]:
-    """
-    Scans for 10+ specific chart patterns.
-    Returns a list of detected signals.
-    """
-    signals = []
-    outcomes = [get_outcome_from_number(d['actual_number']) for d in history]
-    
-    # Create the "Map" string (e.g. "BBSSBSBB")
-    h = "".join(["B" if x == GameConstants.BIG else "S" for x in outcomes])
-    
-    if len(h) < 12: return []
-
-    # --- PATTERN 1: THE DRAGON (Momentum) ---
-    # 5 or more of the same color. We BET WITH IT.
-    if h.endswith("BBBBB"): 
-        confidence = 0.90 + (len(h) - len(h.rstrip('B'))) * 0.01
-        signals.append({"pred": "BIG", "weight": confidence, "src": "Dragon-B"})
-    elif h.endswith("SSSSS"): 
-        confidence = 0.90 + (len(h) - len(h.rstrip('S'))) * 0.01
-        signals.append({"pred": "SMALL", "weight": confidence, "src": "Dragon-S"})
-
-    # --- PATTERN 2: PING PONG (1A1B) ---
-    # B S B S B -> Predict S
-    if h.endswith("BSBSB"): 
-        signals.append({"pred": "SMALL", "weight": 0.92, "src": "PingPong"})
-    elif h.endswith("SBSBS"): 
-        signals.append({"pred": "BIG", "weight": 0.92, "src": "PingPong"})
-
-    # --- PATTERN 3: DOUBLE JUMP (2A2B) ---
-    # BB SS BB -> Predict S (Completing the pair)
-    if h.endswith("BBSSBB"): 
-        signals.append({"pred": "SMALL", "weight": 0.88, "src": "2A2B-Full"})
-    elif h.endswith("SSBBSS"): 
-        signals.append({"pred": "BIG", "weight": 0.88, "src": "2A2B-Full"})
+        z = (norm_rsi * w_rsi) + (momentum * w_mom)
+        prob = MathUtils.sigmoid(z)
         
-    # --- PATTERN 4: STAIRCASE (1-2-3) ---
-    # B SS BBB -> Predict S (Start of 4?) or Break? 
-    # Usually Staircase implies increasing volume.
-    if h.endswith("BSSBBB"):
-        signals.append({"pred": "SMALL", "weight": 0.70, "src": "Staircase"})
+        if prob > 0.55:
+            return EngineResult(GameConstants.BIG, abs(prob-0.5)*2.5, f"Neural(B:{prob:.2f})")
+        elif prob < 0.45:
+            return EngineResult(GameConstants.SMALL, abs(prob-0.5)*2.5, f"Neural(S:{prob:.2f})")
+        return None
+    except: return None
+
+# ------------------------------------------------------------------------------
+# CORE 4: MICRO-STRUCTURE (V1000)
+# ------------------------------------------------------------------------------
+def engine_micro(history: List[Dict]) -> List[EngineResult]:
+    """Speedster engine for last 3 results."""
+    results = []
+    outcomes = [MathUtils.get_outcome(d['actual_number']) for d in history[-10:]]
+    h = "".join(["B" if x == GameConstants.BIG else "S" for x in outcomes if x != GameConstants.SKIP])
+    
+    if len(h) < 3: return []
+    
+    # 3-Streak Continuation
+    if h.endswith("BBB"):
+        results.append(EngineResult(GameConstants.BIG, 0.75, "Micro:Streak3"))
+    elif h.endswith("SSS"):
+        results.append(EngineResult(GameConstants.SMALL, 0.75, "Micro:Streak3"))
         
-    # --- PATTERN 5: SANDWICH (ABA) ---
-    # B S B -> Predict S
+    # Chop Continuation (BSB -> S)
     if h.endswith("BSB"):
-        signals.append({"pred": "SMALL", "weight": 0.60, "src": "Sandwich"})
+        results.append(EngineResult(GameConstants.SMALL, 0.70, "Micro:Chop"))
     elif h.endswith("SBS"):
-        signals.append({"pred": "BIG", "weight": 0.60, "src": "Sandwich"})
+        results.append(EngineResult(GameConstants.BIG, 0.70, "Micro:Chop"))
+        
+    return results
 
-    return signals
-
-def engine_deep_sequence(history: List[Dict]) -> Optional[Dict]:
-    """
-    Legacy Engine: Scans past history for the exact same sequence of last 6 results.
-    """
-    try:
-        outcomes = [get_outcome_from_number(d['actual_number']) for d in history]
-        if len(outcomes) < 100: return None
-        
-        # Look at last 6
-        pattern = outcomes[-6:]
-        pattern_str = "".join(["1" if x == "BIG" else "0" for x in pattern])
-        
-        # Search history
-        history_str = "".join(["1" if x == "BIG" else "0" for x in outcomes[:-1]])
-        
-        # Count what happened after this pattern previously
-        next_b = 0
-        next_s = 0
-        
-        start = 0
-        while True:
-            idx = history_str.find(pattern_str, start)
-            if idx == -1: break
-            
-            # Check the outcome AFTER the pattern
-            if idx + 6 < len(history_str):
-                res = history_str[idx+6] # The character after
-                if res == "1": next_b += 1
-                else: next_s += 1
-            start = idx + 1
-            
-        total = next_b + next_s
-        if total < 2: return None # Not enough sample size
-        
-        if next_b > next_s * 2:
-            return {"pred": "BIG", "weight": 0.80, "src": f"DeepSeq({total})"}
-        elif next_s > next_b * 2:
-            return {"pred": "SMALL", "weight": 0.80, "src": f"DeepSeq({total})"}
-            
-    except: pass
-    return None
-
-# =============================================================================
-# SECTION 6: THE ARCHITECT (MAIN LOGIC CORE)
-# =============================================================================
-
-def ultraAIPredict(history: List[Dict], current_bankroll: float = 10000.0, last_result: Optional[str] = None) -> Dict:
-    """
-    MASTER PREDICTION FUNCTION
-    --------------------------
-    Combines all engines, applies risk management, filters via Chaos Theory,
-    and returns the final betting decision.
-    """
+# ------------------------------------------------------------------------------
+# CORE 5: MACRO-WAVES DRAGON (V1000)
+# ------------------------------------------------------------------------------
+def engine_macro(history: List[Dict]) -> List[EngineResult]:
+    """Detects 4-Trend Dragons and Ping Pong."""
+    results = []
+    outcomes = [MathUtils.get_outcome(d['actual_number']) for d in history[-20:]]
+    h = "".join(["B" if x == GameConstants.BIG else "S" for x in outcomes if x != GameConstants.SKIP])
     
-    # 1. DATA VALIDITY & WARMUP
-    if not history or len(history) < GameConstants.MIN_HISTORY_WARMUP:
-        return {
-            "finalDecision": "SKIP", 
-            "confidence": 0, 
-            "positionsize": 0, 
-            "level": "BOOT", 
-            "reason": f"Need {GameConstants.MIN_HISTORY_WARMUP} Records", 
-            "topsignals": []
-        }
+    if len(h) < 5: return []
+    
+    # Dragon 4 (Fast Dragon)
+    if h.endswith("BBBB"):
+        results.append(EngineResult(GameConstants.BIG, 0.90, "Dragon-B(4)"))
+    elif h.endswith("SSSS"):
+        results.append(EngineResult(GameConstants.SMALL, 0.90, "Dragon-S(4)"))
+        
+    # Ping Pong 4 (BSBS -> B)
+    if h.endswith("BSBS"):
+        results.append(EngineResult(GameConstants.BIG, 0.85, "PingPong(4)"))
+    elif h.endswith("SBSB"):
+        results.append(EngineResult(GameConstants.SMALL, 0.85, "PingPong(4)"))
+        
+    return results
 
-    # 2. UPDATE TRUE MEMORY
-    # We use the VERY LATEST record to settle the previous bet.
+
+# ==============================================================================
+# SECTION 6: THE ARCHITECT (MAIN PREDICTION LOGIC)
+# ==============================================================================
+
+def ultraAIPredict(history: List[Dict], current_bankroll: float, last_result: Optional[str] = None) -> Dict:
+    """
+    MASTER FUNCTION.
+    """
+    # --------------------------------------------------------------------------
+    # 1. UPDATE TITAN MEMORY (Handling Win/Loss)
+    # --------------------------------------------------------------------------
+    if not history:
+        return _build_response("SKIP", 0, 0, "BOOT", "Waiting for data", [])
+        
     latest_record = history[-1]
-    latest_issue = str(latest_record['issue'])
-    latest_outcome = get_outcome_from_number(latest_record['actual_number'])
+    titan_memory.update_streak(
+        str(latest_record['issue']), 
+        MathUtils.get_outcome(latest_record['actual_number'])
+    )
     
-    titan_memory.update_streak(latest_issue, latest_outcome)
-    loss_streak = titan_memory.loss_streak
+    streak = titan_memory.loss_streak
     
-    # 3. VIOLET GUARD (0 & 5 SAFETY)
-    # 0 and 5 are 'Violet' numbers. They often reset the algorithm.
-    # If the last number was 0 or 5, and we are not in a deep streak, we skip for safety.
-    last_num = int(safe_float(latest_record['actual_number']))
-    if last_num in [0, 5] and loss_streak < 2:
-         return {
-            "finalDecision": "SKIP", 
-            "confidence": 0, 
-            "positionsize": 0, 
-            "level": "VIOLET", 
-            "reason": f"Num {last_num} Reset", 
-            "topsignals": []
-        }
+    # --------------------------------------------------------------------------
+    # 2. ANALYZE REGIME & CHAOS
+    # --------------------------------------------------------------------------
+    regime_data = MarketRegime.analyze(history)
+    current_regime = regime_data['status']
+    
+    # Chaos Guard (V1000 style)
+    if regime_data['chop_index'] > RiskConfig.MAX_CHAOS_INDEX and streak == 0:
+        return _build_response("SKIP", 0, 0, "🛑 CHAOS", f"Flip Rate {regime_data['chop_index']:.0%}", [])
 
-    # 4. CHAOS FILTER (THE SHIELD)
-    # If we are not desperate (Streak < 3), we demand a clean market.
-    if loss_streak < 3:
-        is_choppy, chaos_reason = engine_chaos_filter(history)
-        if is_choppy:
-             return {
-                "finalDecision": "SKIP", 
-                "confidence": 0, 
-                "positionsize": 0, 
-                "level": "🛑 CHOPPY", 
-                "reason": chaos_reason, 
-                "topsignals": []
-            }
+    # --------------------------------------------------------------------------
+    # 3. EXECUTE PENTA-CORE ENGINES
+    # --------------------------------------------------------------------------
+    signals: List[EngineResult] = []
+    
+    # V302 Engines
+    s_quant = engine_quantum(history)
+    if s_quant: signals.append(s_quant)
+    
+    s_patt = engine_pattern(history)
+    if s_patt: signals.append(s_patt)
+    
+    s_neur = engine_neural(history, current_regime)
+    if s_neur: signals.append(s_neur)
+    
+    # V1000 Engines (List returns)
+    signals.extend(engine_micro(history))
+    signals.extend(engine_macro(history))
+    
+    if not signals:
+        return _build_response("SKIP", 0, 0, "WAITING", "No Pattern Found", [])
 
-    # 5. EXECUTE ENGINES
-    signals = []
+    # --------------------------------------------------------------------------
+    # 4. SIGNAL AGGREGATION & RESONANCE
+    # --------------------------------------------------------------------------
+    big_weight = sum(s.weight for s in signals if s.prediction == GameConstants.BIG)
+    small_weight = sum(s.weight for s in signals if s.prediction == GameConstants.SMALL)
     
-    # A. Omni Patterns (High Weight)
-    p_sigs = engine_omni_patterns(history)
-    signals.extend(p_sigs)
-    
-    # B. Math Reversion (Medium Weight)
-    m_sig = engine_math_reversion(history)
-    if m_sig: signals.append(m_sig)
-    
-    # C. Deep Sequence (Medium Weight)
-    d_sig = engine_deep_sequence(history)
-    if d_sig: signals.append(d_sig)
-
-    # 6. VOTE AGGREGATION
-    big_score = sum(s['weight'] for s in signals if s['pred'] == GameConstants.BIG)
-    small_score = sum(s['weight'] for s in signals if s['pred'] == GameConstants.SMALL)
-    
-    total_score = big_score + small_score
-    final_pred = GameConstants.SKIP
+    final_decision = GameConstants.SKIP
     confidence = 0.0
     
-    # Normalize confidence
-    if total_score > 0:
-        if big_score > small_score:
-            final_pred = GameConstants.BIG
-            confidence = big_score / (total_score + 0.5) # Dampen slightly
-            # Add bonus confidence if multiple engines agree
-            if len([s for s in signals if s['pred'] == "BIG"]) >= 2:
-                confidence += 0.1
-        else:
-            final_pred = GameConstants.SMALL
-            confidence = small_score / (total_score + 0.5)
-            if len([s for s in signals if s['pred'] == "SMALL"]) >= 2:
-                confidence += 0.1
-                
+    if big_weight > small_weight:
+        final_decision = GameConstants.BIG
+        confidence = big_weight / (len(signals) * 0.6 + 1) # Normalize
+    elif small_weight > big_weight:
+        final_decision = GameConstants.SMALL
+        confidence = small_weight / (len(signals) * 0.6 + 1)
+        
+    # --- HYPER-FLUX RESONANCE CHECK (The V1000 Magic) ---
+    # Does Micro (Speed) agree with Macro (Dragon)?
+    has_micro = any(s.source.startswith("Micro") and s.prediction == final_decision for s in signals)
+    has_macro = any(s.source.startswith("Dragon") and s.prediction == final_decision for s in signals)
+    
+    is_resonant = False
+    if has_micro and has_macro:
+        confidence += 0.20 # Massive Boost
+        is_resonant = True
+
+    # Cap Confidence
     confidence = min(confidence, 0.99)
 
-    # 7. SNIPER LOGIC GATES (STRATEGY SELECTION)
+    # --------------------------------------------------------------------------
+    # 5. RISK MANAGEMENT (MARTINGALE LOGIC)
+    # --------------------------------------------------------------------------
+    stake = 0.0
+    level_label = "SKIP"
+    reason = f"Signal {confidence:.1%}"
     
+    # Base Bet
+    base_bet = max(current_bankroll * RiskConfig.BASE_RISK_PERCENT, RiskConfig.MIN_BET_AMOUNT)
+    if base_bet > 3000: base_bet = 3000
+
     should_bet = False
-    level_name = "WAITING"
-    reason_text = "Analyzing..."
     
-    # GATE 1: STANDARD ENTRY (Streak 0)
-    if loss_streak == 0:
-        if confidence >= GameConstants.CONFIDENCE_LEVEL_1:
+    # LEVEL 1: STANDARD (Streak 0)
+    if streak == 0:
+        if confidence >= RiskConfig.CONFIDENCE_LEVEL_1:
             should_bet = True
-            level_name = "✅ LEVEL 1"
-            reason_text = "Strong Trend"
-        else:
-            level_name = "SKIP (Low Conf)"
-            reason_text = f"Conf {confidence:.2f} < {GameConstants.CONFIDENCE_LEVEL_1}"
-
-    # GATE 2: RECOVERY (Streak 1)
-    elif loss_streak == 1:
-        if confidence >= GameConstants.CONFIDENCE_LEVEL_2:
-            should_bet = True
-            level_name = "⚠️ LEVEL 2"
-            reason_text = "Recovery Signal"
-        else:
-            level_name = "SKIP (Recov)"
-            reason_text = "Waiting for A+"
-
-    # GATE 3: THE SNIPER SHIELD (Streak 2+)
-    # We DO NOT BET unless we see a Pattern (Weight > 0.85)
-    elif loss_streak >= 2:
-        # Check if we have a pure pattern source
-        has_pattern = any(s['weight'] >= 0.85 for s in signals)
+            level_label = "✅ ACTIVE"
+            reason = f"Base Entry ({confidence:.0%})"
+            
+    # LEVEL 2: RECOVERY (Streak 1-2)
+    elif 1 <= streak <= 2:
+        # V302 Aggression: If we are resonant, we attack hard
+        req_conf = RiskConfig.CONFIDENCE_LEVEL_2
+        if is_resonant: req_conf -= 0.10 # Lower threshold if signals align perfectly
         
-        if has_pattern:
+        if confidence >= req_conf:
             should_bet = True
-            level_name = f"🔥 SNIPER (L{loss_streak+1})"
-            reason_text = "PERFECT PATTERN MATCH"
-        else:
+            level_label = f"⚠️ RECOVER L{streak}"
+            reason = "Martingale Active"
+            
+    # LEVEL 3: SNIPER (Streak 3+)
+    elif streak >= 3:
+        if streak >= RiskConfig.MAX_CONSECUTIVE_LOSSES:
+            # STOP LOSS
             should_bet = False
-            level_name = "🛡️ SHIELD MODE"
-            reason_text = "Holding for Dragon/PingPong"
+            level_label = "🛑 STOP LOSS"
+            reason = "Max Streak Hit"
+        elif confidence >= RiskConfig.CONFIDENCE_LEVEL_3 or is_resonant:
+            should_bet = True
+            level_label = f"🔥 TITAN SNIPE L{streak}"
+            reason = "High Probability"
+        else:
+            level_label = f"🛡️ HOLD L{streak}"
+            reason = "Waiting for Dragon"
 
-    # 8. POSITION SIZING (MARTINGALE)
-    stake = 0
+    # Calculate Stake
     if should_bet:
-        # Get multiplier based on streak index
-        m_idx = min(loss_streak, len(RiskConfig.MARTINGALE_MULTIPLIERS) - 1)
-        multiplier = RiskConfig.MARTINGALE_MULTIPLIERS[m_idx]
+        m_idx = min(streak, len(RiskConfig.MARTINGALE_MULTIPLIERS) - 1)
+        mult = RiskConfig.MARTINGALE_MULTIPLIERS[m_idx]
+        stake = base_bet * mult
         
-        base_stake = current_bankroll * RiskConfig.BASE_RISK_PERCENT
-        stake = int(base_stake * multiplier)
-        
-        # Hard Caps
-        stake = max(RiskConfig.MIN_BET_AMOUNT, min(stake, RiskConfig.MAX_BET_AMOUNT))
+        # Safety Clamps
+        stake = min(stake, RiskConfig.MAX_BET_AMOUNT)
         if stake > current_bankroll * RiskConfig.MAX_BANKROLL_USAGE:
-            stake = int(current_bankroll * RiskConfig.MAX_BANKROLL_USAGE)
-            level_name += " (Max Cap)"
+            stake = current_bankroll * RiskConfig.MAX_BANKROLL_USAGE
+            
+        # Register the bet in memory for next round verification
+        next_issue = str(int(latest_record['issue']) + 1)
+        titan_memory.register_bet(next_issue, final_decision)
 
-        # 9. REGISTER PREDICTION
-        # We are betting on the NEXT issue.
-        next_issue = str(int(latest_issue) + 1)
-        titan_memory.register_bet(next_issue, final_pred)
-    
-    # 10. FORMAT OUTPUT
-    # Sort signals by weight for display
-    sorted_sigs = sorted(signals, key=lambda x: x['weight'], reverse=True)
-    top_signals = [f"{s['src']}={s['pred']}" for s in sorted_sigs[:3]]
-    
+    # --------------------------------------------------------------------------
+    # 6. RETURN PAYLOAD
+    # --------------------------------------------------------------------------
+    # Format top signals for display
+    sorted_sigs = sorted(signals, key=lambda x: x.weight, reverse=True)[:3]
+    top_sig_names = [f"{s.source}={s.prediction}" for s in sorted_sigs]
+
+    return _build_response(
+        final_decision if should_bet else GameConstants.SKIP,
+        confidence,
+        int(stake),
+        level_label,
+        reason,
+        top_sig_names
+    )
+
+def _build_response(decision, conf, stake, level, reason, sources):
+    """Standardized Dictionary Return."""
     return {
-        'finalDecision': final_pred if should_bet else GameConstants.SKIP,
-        'confidence': confidence,
+        'finalDecision': decision,
+        'confidence': conf,
         'positionsize': stake,
-        'level': level_name,
-        'reason': reason_text,
-        'topsignals': top_signals
+        'level': level,
+        'reason': reason,
+        'topsignals': sources
     }
 
-# =============================================================================
-# SELF-DIAGNOSTIC BLOCK (RUNS IF EXECUTED DIRECTLY)
-# =============================================================================
+# ==============================================================================
+# SELF-TEST
+# ==============================================================================
 if __name__ == "__main__":
-    print("TITAN V900 - OMNI-SNIPER CORE DIAGNOSTIC")
-    print("----------------------------------------")
+    print("TITAN V2000 (SINGULARITY) INITIALIZED.")
+    print("Testing Penta-Core Engines...")
     
-    # Generate Mock Data (Ping Pong Pattern)
-    print("[1] Generating Mock Data (Ping Pong: B S B S B)...")
-    mock_history = []
-    start_issue = 20240000
-    
-    # Pattern: B(5) S(4) B(6) S(3) B(7) -> Expect S
-    sequence = [5, 4, 6, 3, 7] 
-    
-    for i, num in enumerate(sequence):
-        mock_history.append({
-            'issue': str(start_issue + i),
-            'actual_number': num,
-            'fetch_time': '2024-01-01'
-        })
+    # Generate Mock Data (Dragon Pattern: B B B B)
+    mock = []
+    start_iss = 20240101000
+    for i in range(50):
+        # Create a pattern of 4 BIGs at the end
+        if i >= 46: val = 8 # BIG
+        elif i % 2 == 0: val = 2 # SMALL
+        else: val = 7 # BIG
         
-    print(f"    Data Points: {len(mock_history)}")
-    print(f"    Last Outcome: {get_outcome_from_number(mock_history[-1]['actual_number'])}")
+        mock.append({'issue': str(start_iss + i), 'actual_number': val})
+        
+    print("\n[Input]: Last 4 results are BIG (Dragon Pattern)")
+    res = ultraAIPredict(mock, 10000.0)
     
-    # Test Prediction
-    print("[2] Running Prediction Architect...")
-    result = ultraAIPredict(mock_history, current_bankroll=1000.0)
+    print(f"Decision: {res['finalDecision']}")
+    print(f"Level:    {res['level']}")
+    print(f"Reason:   {res['reason']}")
+    print(f"Signals:  {res['topsignals']}")
     
-    print("\n[DIAGNOSTIC RESULTS]")
-    print(f"Decision:   {result['finalDecision']}")
-    print(f"Confidence: {result['confidence']:.2%}")
-    print(f"Stake:      ${result['positionsize']}")
-    print(f"Level:      {result['level']}")
-    print(f"Reason:     {result['reason']}")
-    print(f"Signals:    {result['topsignals']}")
-    
-    if result['finalDecision'] == "SMALL":
-        print("\n[SUCCESS] Engine correctly identified Ping-Pong pattern.")
+    if "Dragon-B(4)=BIG" in str(res['topsignals']):
+        print("\n>> SUCCESS: Dragon Detected.")
     else:
-        print("\n[FAIL] Engine failed to identify pattern.")
+        print("\n>> WARNING: Dragon Not Detected.")
