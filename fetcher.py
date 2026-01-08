@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FETCHER.PY (V2026.7 - SOVEREIGN INTEGRATED + DEEP HISTORY FETCH)
+# MODULE: FETCHER.PY (V2026.8 - CIRCUIT BREAKER EDITION)
 # ==============================================================================
 
 import aiohttp
@@ -21,7 +21,6 @@ except ImportError as e:
     sys.exit()
 
 # --- API CONFIGURATION ---
-# Using GET method as per your server configuration
 API_URL = "https://api-wo4u.onrender.com/api/get_history"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -49,6 +48,12 @@ session_wins = 0
 session_losses = 0
 last_win_status = "NONE"
 
+# --- CIRCUIT BREAKER VARS (NEW) ---
+consecutive_wins = 0
+consecutive_losses = 0
+cooldown_counter = 0     # How many periods to skip
+cooldown_reason = ""     # Why are we skipping?
+
 # --- DATABASE HANDLER ---
 def ensure_db_setup():
     """Initializes SQLite with the results table."""
@@ -61,7 +66,6 @@ async def save_to_db(issue, code):
     """Saves records and ensures they are committed to disk."""
     try:
         conn = sqlite3.connect(DB_FILE)
-        # Use str(issue) to prevent scientific notation corruption
         conn.execute("INSERT OR IGNORE INTO results (issue, code, fetch_time) VALUES (?, ?, ?)", 
                        (str(issue), int(code), str(datetime.now())))
         conn.commit()
@@ -87,6 +91,10 @@ def update_dashboard(status_text="IDLE", timer_val=0):
     total = session_wins + session_losses
     acc = f"{(session_wins/total)*100:.1f}%" if total > 0 else "0.0%"
     
+    # If in cooldown, show that in the status
+    if cooldown_counter > 0:
+        status_text = f"COOLING ({cooldown_counter})"
+        
     data = {
         "period": last_prediction['issue'] if last_prediction['issue'] else "---",
         "prediction": last_prediction['label'],
@@ -98,7 +106,13 @@ def update_dashboard(status_text="IDLE", timer_val=0):
         "status_text": status_text,
         "timer": timer_val,
         "data_size": len(RAM_HISTORY),
-        "stats": {"wins": session_wins, "losses": session_losses, "accuracy": acc},
+        "stats": {
+            "wins": session_wins, 
+            "losses": session_losses, 
+            "accuracy": acc,
+            "streak_w": consecutive_wins,
+            "streak_l": consecutive_losses
+        },
         "history": list(UI_HISTORY),
         "timestamp": time.time()
     }
@@ -109,11 +123,6 @@ def update_dashboard(status_text="IDLE", timer_val=0):
 
 # --- API HANDLER ---
 async def fetch_api_data(session, size_limit=20):
-    """
-    Fetches using GET to avoid 405 error.
-    Uses query parameters to request more data (size/limit).
-    """
-    # Common query parameters for pagination in these APIs
     params = {
         "size": size_limit,
         "pageSize": size_limit, 
@@ -121,12 +130,10 @@ async def fetch_api_data(session, size_limit=20):
         "count": size_limit,
         "pageNo": 1
     }
-    
     try:
         async with session.get(API_URL, headers=HEADERS, params=params, timeout=15) as response:
             if response.status == 200:
                 json_data = await response.json(content_type=None)
-                # Map various possible JSON structures
                 return json_data.get('data', {}).get('list', []) or json_data.get('list', [])
             else:
                 print(f"[DEBUG] API Rejection: Status {response.status}")
@@ -137,33 +144,34 @@ async def fetch_api_data(session, size_limit=20):
 # --- MAIN LOOP ---
 async def main_loop():
     global current_bankroll, last_prediction, last_win_status, session_wins, session_losses
+    global consecutive_wins, consecutive_losses, cooldown_counter, cooldown_reason
+    
     ensure_db_setup()
     last_processed_issue = None
     
     async with aiohttp.ClientSession() as session:
         print("\n" + "="*64)
-        print("   TITAN V201 - SOVEREIGN ENGINE (HYBRID SYNC ACTIVE)")
+        print("   TITAN V201 - CIRCUIT BREAKER EDITION")
+        print("   Logic: 5 Wins -> Pause 6 | 4 Losses -> Pause 8")
         print("="*64)
         
         # ---------------------------------------------------------
-        # 1. INITIAL DEEP SYNC (Fetch 500 records on boot)
+        # 1. INITIAL DEEP SYNC
         # ---------------------------------------------------------
-        print("[BOOT] Fetching deep history (500 records)...")
+        print("[BOOT] Fetching deep history...")
         boot_data = await fetch_api_data(session, size_limit=500)
         
         if boot_data:
             count = 0
-            # Reverse so we process oldest -> newest
             for item in reversed(boot_data):
                 iss = item.get('issueNumber') or item.get('issue')
                 num = item.get('number') or item.get('result')
                 if iss and num is not None:
                     await save_to_db(iss, num)
                     count += 1
-            print(f"[BOOT] Successfully synced {count} historical records.")
+            print(f"[BOOT] Synced {count} records.")
         else:
-            print("[BOOT WARNING] API returned no data. Retrying with standard fetch...")
-            # Fallback if deep fetch fails
+            print("[BOOT WARNING] Deep fetch failed. Using standard fetch.")
             boot_data = await fetch_api_data(session, size_limit=20)
             if boot_data:
                 for item in reversed(boot_data):
@@ -173,26 +181,24 @@ async def main_loop():
                         await save_to_db(iss, num)
 
         await load_db_to_ram()
-        print(f"[BOOT] System Ready. Total Data Points: {len(RAM_HISTORY)}")
+        print(f"[BOOT] System Ready. Data Points: {len(RAM_HISTORY)}")
 
         # ---------------------------------------------------------
         # 2. REAL-TIME LOOP
         # ---------------------------------------------------------
         while True:
-            # Regular fetch (lightweight, only 20 records needed for updates)
             raw_list = await fetch_api_data(session, size_limit=20)
             
             if raw_list:
-                # A. Sync any new data found in the list
+                # A. Sync new data
                 for item in reversed(raw_list):
                     iss = str(item.get('issueNumber') or item.get('issue'))
                     num = int(item.get('number') or item.get('result'))
                     
-                    # If this issue is not in our RAM, save it
                     if not any(d['issue'] == iss for d in RAM_HISTORY):
                         await save_to_db(iss, num)
                         RAM_HISTORY.append({'issue': iss, 'actual_number': num})
-                        print(f"[SYNC] New Result Found: Period {iss} = {num}")
+                        print(f"[SYNC] New: {iss} = {num}")
 
                 # B. Identify latest state
                 latest = raw_list[0]
@@ -203,23 +209,34 @@ async def main_loop():
                 update_dashboard("SYNCED", seconds_left)
                 
                 if curr_issue != last_processed_issue:
-                    # C. Evaluate previous prediction result
+                    # =========================================================
+                    # C. EVALUATE PREVIOUS BET & UPDATE STREAKS
+                    # =========================================================
                     if last_prediction['issue'] == curr_issue:
                         real_outcome = get_outcome_from_number(curr_num)
                         pred_label = last_prediction['label']
                         
-                        if pred_label not in ["WAITING", "SKIP", GameConstants.SKIP]:
+                        # Only count Win/Loss if we actually bet (Not WAITING/SKIP/COOLDOWN)
+                        if pred_label not in ["WAITING", "SKIP", "COOLDOWN", GameConstants.SKIP]:
                             if pred_label == real_outcome:
                                 profit = last_prediction['stake'] * 0.98
                                 current_bankroll += profit
                                 session_wins += 1
                                 last_win_status = "WIN"
-                                print(f"\n[RESULT] {curr_issue} was {real_outcome} - WIN (+{profit:.0f})")
+                                
+                                # STREAK LOGIC
+                                consecutive_wins += 1
+                                consecutive_losses = 0
+                                print(f"\n[RESULT] {curr_issue} WIN (+{profit:.0f}) | Win Streak: {consecutive_wins}")
                             else:
                                 current_bankroll -= last_prediction['stake']
                                 session_losses += 1
                                 last_win_status = "LOSS"
-                                print(f"\n[RESULT] {curr_issue} was {real_outcome} - LOSS (-{last_prediction['stake']:.0f})")
+                                
+                                # STREAK LOGIC
+                                consecutive_losses += 1
+                                consecutive_wins = 0
+                                print(f"\n[RESULT] {curr_issue} LOSS (-{last_prediction['stake']:.0f}) | Loss Streak: {consecutive_losses}")
                             
                             UI_HISTORY.appendleft({
                                 "period": curr_issue, 
@@ -227,25 +244,69 @@ async def main_loop():
                                 "result": last_win_status,
                                 "bankroll": round(current_bankroll, 2)
                             })
-
-                    # D. Generate next prediction
-                    if len(RAM_HISTORY) >= MIN_DATA_REQUIRED:
-                        try:
-                            next_issue = str(int(curr_issue) + 1)
-                            # Call the original Trident Engine
-                            res = ultraAIPredict(list(RAM_HISTORY), current_bankroll, last_prediction['label'])
+                        else:
+                            # It was a SKIP or COOLDOWN round
+                            print(f"\n[RESULT] {curr_issue} was {real_outcome} (We Skipped)")
                             
+                            # If we were in cooldown, decrease the counter
+                            if cooldown_counter > 0:
+                                cooldown_counter -= 1
+                                print(f"[COOL] Cooldown remaining: {cooldown_counter} periods")
+                                if cooldown_counter == 0:
+                                    print("[COOL] Cooldown Finished. Engines Restarting...")
+
+                    # =========================================================
+                    # D. CIRCUIT BREAKER CHECK (TRIGGER LOGIC)
+                    # =========================================================
+                    # Only set new cooldown if we aren't already in one
+                    if cooldown_counter == 0:
+                        if consecutive_wins >= 5:
+                            cooldown_counter = 6  # Pause for 6 periods
+                            cooldown_reason = "PROFIT LOCK (5 Wins)"
+                            consecutive_wins = 0  # Reset streak so we don't trigger again immediately
+                            print(f"\n[TRIGGER] 5 WINS HIT! Engines cooling down for {cooldown_counter} rounds.")
+                            
+                        elif consecutive_losses >= 4:
+                            cooldown_counter = 8  # Pause for 8 periods (Safe Mode)
+                            cooldown_reason = "STOP LOSS (3 Loss)"
+                            consecutive_losses = 0
+                            print(f"\n[TRIGGER] 3 LOSSES HIT! Engines cooling down for {cooldown_counter} rounds.")
+
+                    # =========================================================
+                    # E. GENERATE NEXT PREDICTION
+                    # =========================================================
+                    if len(RAM_HISTORY) >= MIN_DATA_REQUIRED:
+                        next_issue = str(int(curr_issue) + 1)
+                        
+                        # --- COOLDOWN ACTIVE? ---
+                        if cooldown_counter > 0:
                             last_prediction = {
-                                "issue": next_issue, 
-                                "label": res['finalDecision'], 
-                                "stake": res['positionsize'],
-                                "conf": res['confidence'], 
-                                "level": res['level'], 
-                                "reason": res.get('reason', 'Analyzing Pattern...')
+                                "issue": next_issue,
+                                "label": "COOLDOWN",
+                                "stake": 0,
+                                "conf": 0,
+                                "level": "PAUSED",
+                                "reason": f"{cooldown_reason} - Wait {cooldown_counter}",
+                                "strategy": "REST"
                             }
-                            print(f"[PRED] Target: {next_issue} | Decision: {last_prediction['label']} | Conf: {last_prediction['conf']:.0%}")
-                        except Exception as e:
-                            print(f"[ENGINE ERROR] {e}")
+                            print(f"[PRED] Target: {next_issue} | PAUSED | {cooldown_reason}")
+                        
+                        # --- NORMAL OPERATION ---
+                        else:
+                            try:
+                                res = ultraAIPredict(list(RAM_HISTORY), current_bankroll, last_prediction['label'])
+                                
+                                last_prediction = {
+                                    "issue": next_issue, 
+                                    "label": res['finalDecision'], 
+                                    "stake": res['positionsize'],
+                                    "conf": res['confidence'], 
+                                    "level": res['level'], 
+                                    "reason": res.get('reason', 'Analyzing Pattern...')
+                                }
+                                print(f"[PRED] Target: {next_issue} | Decision: {last_prediction['label']} | Conf: {last_prediction['conf']:.0%}")
+                            except Exception as e:
+                                print(f"[ENGINE ERROR] {e}")
                     else:
                         print(f"[WARMUP] Data: {len(RAM_HISTORY)}/{MIN_DATA_REQUIRED}")
                     
