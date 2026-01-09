@@ -1,5 +1,5 @@
 # ==============================================================================
-# MODULE: FETCHER.PY (V2026.11 - GHOST STATS SEPARATED)
+# MODULE: FETCHER.PY (V2026.8 - CIRCUIT BREAKER EDITION)
 # ==============================================================================
 
 import aiohttp
@@ -44,18 +44,15 @@ last_prediction = {
     "issue": None, "label": "WAITING", "stake": 0, "conf": 0, 
     "level": "---", "reason": "Collecting Data...", "strategy": "BOOTING"
 }
-
-# STATS (Real Money Only)
 session_wins = 0
 session_losses = 0
 last_win_status = "NONE"
 
-# STRATEGY VARS
-consecutive_wins = 0        # Triggers Profit Lock (Real only)
-consecutive_real_losses = 0 # Triggers Ghost Mode
-ghost_mode_active = False   # The Shield
-virtual_win_streak = 0      # Needed to exit Ghost Mode
-cooldown_counter = 0        # Periods to wait (Profit Lock)
+# --- CIRCUIT BREAKER VARS (NEW) ---
+consecutive_wins = 0
+consecutive_losses = 0
+cooldown_counter = 0     # How many periods to skip
+cooldown_reason = ""     # Why are we skipping?
 
 # --- DATABASE HANDLER ---
 def ensure_db_setup():
@@ -66,7 +63,7 @@ def ensure_db_setup():
     conn.close()
 
 async def save_to_db(issue, code):
-    """Saves records to disk."""
+    """Saves records and ensures they are committed to disk."""
     try:
         conn = sqlite3.connect(DB_FILE)
         conn.execute("INSERT OR IGNORE INTO results (issue, code, fetch_time) VALUES (?, ?, ?)", 
@@ -76,7 +73,7 @@ async def save_to_db(issue, code):
     except: pass
 
 async def load_db_to_ram():
-    """Loads history from disk to RAM."""
+    """Loads historical data from local storage into the active AI memory."""
     RAM_HISTORY.clear()
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -91,15 +88,12 @@ async def load_db_to_ram():
 
 # --- UI DASHBOARD ---
 def update_dashboard(status_text="IDLE", timer_val=0):
-    # Accuracy based ONLY on Real Bets
-    total_real = session_wins + session_losses
-    acc = f"{(session_wins/total_real)*100:.1f}%" if total_real > 0 else "0.0%"
+    total = session_wins + session_losses
+    acc = f"{(session_wins/total)*100:.1f}%" if total > 0 else "0.0%"
     
-    # Custom Status Messages
+    # If in cooldown, show that in the status
     if cooldown_counter > 0:
-        status_text = f"PROFIT LOCK (Wait {cooldown_counter})"
-    elif ghost_mode_active:
-        status_text = f"👻 GHOST MODE ({virtual_win_streak}/2)"
+        status_text = f"COOLING ({cooldown_counter})"
         
     data = {
         "period": last_prediction['issue'] if last_prediction['issue'] else "---",
@@ -116,8 +110,8 @@ def update_dashboard(status_text="IDLE", timer_val=0):
             "wins": session_wins, 
             "losses": session_losses, 
             "accuracy": acc,
-            "real_streak_l": consecutive_real_losses,
-            "win_streak": consecutive_wins
+            "streak_w": consecutive_wins,
+            "streak_l": consecutive_losses
         },
         "history": list(UI_HISTORY),
         "timestamp": time.time()
@@ -129,12 +123,20 @@ def update_dashboard(status_text="IDLE", timer_val=0):
 
 # --- API HANDLER ---
 async def fetch_api_data(session, size_limit=20):
-    params = {"size": size_limit, "pageSize": size_limit, "limit": size_limit, "count": size_limit, "pageNo": 1}
+    params = {
+        "size": size_limit,
+        "pageSize": size_limit, 
+        "limit": size_limit,
+        "count": size_limit,
+        "pageNo": 1
+    }
     try:
         async with session.get(API_URL, headers=HEADERS, params=params, timeout=15) as response:
             if response.status == 200:
                 json_data = await response.json(content_type=None)
                 return json_data.get('data', {}).get('list', []) or json_data.get('list', [])
+            else:
+                print(f"[DEBUG] API Rejection: Status {response.status}")
     except Exception as e:
         print(f"[FETCH ERROR] {e}")
     return None
@@ -142,47 +144,63 @@ async def fetch_api_data(session, size_limit=20):
 # --- MAIN LOOP ---
 async def main_loop():
     global current_bankroll, last_prediction, last_win_status, session_wins, session_losses
-    global consecutive_wins, consecutive_real_losses, cooldown_counter
-    global ghost_mode_active, virtual_win_streak
+    global consecutive_wins, consecutive_losses, cooldown_counter, cooldown_reason
     
     ensure_db_setup()
     last_processed_issue = None
     
     async with aiohttp.ClientSession() as session:
         print("\n" + "="*64)
-        print("   TITAN V201 - SOVEREIGN EDITION (CLEAN STATS)")
-        print("   1. Profit Lock: 10 Real Wins -> Pause 6 Rounds")
-        print("   2. Ghost Protocol: 2 Real Losses -> Enter Ghost Mode")
-        print("   * Ghost Wins/Losses are NOT counted in Session Stats.")
+        print("   TITAN V201 - CIRCUIT BREAKER EDITION")
+        print("   Logic: 5 Wins -> Pause 6 | 3 Losses -> Pause 8")
         print("="*64)
         
+        # ---------------------------------------------------------
         # 1. INITIAL DEEP SYNC
+        # ---------------------------------------------------------
         print("[BOOT] Fetching deep history...")
         boot_data = await fetch_api_data(session, size_limit=500)
+        
         if boot_data:
+            count = 0
             for item in reversed(boot_data):
                 iss = item.get('issueNumber') or item.get('issue')
                 num = item.get('number') or item.get('result')
                 if iss and num is not None:
                     await save_to_db(iss, num)
+                    count += 1
+            print(f"[BOOT] Synced {count} records.")
+        else:
+            print("[BOOT WARNING] Deep fetch failed. Using standard fetch.")
+            boot_data = await fetch_api_data(session, size_limit=20)
+            if boot_data:
+                for item in reversed(boot_data):
+                    iss = item.get('issueNumber') or item.get('issue')
+                    num = item.get('number') or item.get('result')
+                    if iss and num is not None:
+                        await save_to_db(iss, num)
+
         await load_db_to_ram()
         print(f"[BOOT] System Ready. Data Points: {len(RAM_HISTORY)}")
 
+        # ---------------------------------------------------------
         # 2. REAL-TIME LOOP
+        # ---------------------------------------------------------
         while True:
             raw_list = await fetch_api_data(session, size_limit=20)
             
             if raw_list:
-                # A. SYNC DATA
+                # A. Sync new data
                 for item in reversed(raw_list):
                     iss = str(item.get('issueNumber') or item.get('issue'))
                     num = int(item.get('number') or item.get('result'))
+                    
                     if not any(d['issue'] == iss for d in RAM_HISTORY):
                         await save_to_db(iss, num)
                         RAM_HISTORY.append({'issue': iss, 'actual_number': num})
                         print(f"[SYNC] New: {iss} = {num}")
 
-                # B. UPDATE STATE
+                # B. Identify latest state
                 latest = raw_list[0]
                 curr_issue = str(latest.get('issueNumber') or latest.get('issue'))
                 curr_num = int(latest.get('number') or latest.get('result'))
@@ -192,125 +210,101 @@ async def main_loop():
                 
                 if curr_issue != last_processed_issue:
                     # =========================================================
-                    # C. RESULT PROCESSING
+                    # C. EVALUATE PREVIOUS BET & UPDATE STREAKS
                     # =========================================================
                     if last_prediction['issue'] == curr_issue:
                         real_outcome = get_outcome_from_number(curr_num)
                         pred_label = last_prediction['label']
                         
+                        # Only count Win/Loss if we actually bet (Not WAITING/SKIP/COOLDOWN)
                         if pred_label not in ["WAITING", "SKIP", "COOLDOWN", GameConstants.SKIP]:
-                            is_win = (pred_label == real_outcome)
-                            
-                            # --- 1. GHOST MODE LOGIC (Stats NOT Counted) ---
-                            if ghost_mode_active:
-                                if is_win:
-                                    virtual_win_streak += 1
-                                    print(f"\n[GHOST] {curr_issue} VIRTUAL WIN ({virtual_win_streak}/2)")
-                                    last_win_status = "GHOST_WIN"
-                                    
-                                    # EXIT GHOST MODE
-                                    if virtual_win_streak >= 2:
-                                        ghost_mode_active = False
-                                        consecutive_real_losses = 0 
-                                        print(">>> [REVIVAL] ENGINES STABILIZED. RESUMING REAL MONEY. <<<")
-                                else:
-                                    virtual_win_streak = 0
-                                    print(f"\n[GHOST] {curr_issue} VIRTUAL LOSS (Reset)")
-                                    last_win_status = "GHOST_LOSS"
-
-                            # --- 2. REAL MONEY LOGIC (Stats Counted) ---
+                            if pred_label == real_outcome:
+                                profit = last_prediction['stake'] * 0.98
+                                current_bankroll += profit
+                                session_wins += 1
+                                last_win_status = "WIN"
+                                
+                                # STREAK LOGIC
+                                consecutive_wins += 1
+                                consecutive_losses = 0
+                                print(f"\n[RESULT] {curr_issue} WIN (+{profit:.0f}) | Win Streak: {consecutive_wins}")
                             else:
-                                if is_win:
-                                    profit = last_prediction['stake'] * 0.98
-                                    current_bankroll += profit
-                                    
-                                    # Update Stats
-                                    session_wins += 1
-                                    consecutive_wins += 1 
-                                    consecutive_real_losses = 0
-                                    last_win_status = "WIN"
-                                    
-                                    print(f"\n[REAL] {curr_issue} WIN (+{profit:.0f}) | Streak: {consecutive_wins}/10")
-                                else:
-                                    current_bankroll -= last_prediction['stake']
-                                    
-                                    # Update Stats
-                                    session_losses += 1
-                                    consecutive_real_losses += 1
-                                    consecutive_wins = 0
-                                    last_win_status = "LOSS"
-                                    
-                                    print(f"\n[REAL] {curr_issue} LOSS (-{last_prediction['stake']:.0f}) | Loss Streak: {consecutive_real_losses}")
-                                    
-                                    # TRIGGER GHOST MODE
-                                    if consecutive_real_losses >= 2:
-                                        ghost_mode_active = True
-                                        virtual_win_streak = 0
-                                        print(">>> [ALERT] 2 LOSSES. ACTIVATING GHOST PROTOCOL. <<<")
-
-                            # Add to UI History (Visual only)
+                                current_bankroll -= last_prediction['stake']
+                                session_losses += 1
+                                last_win_status = "LOSS"
+                                
+                                # STREAK LOGIC
+                                consecutive_losses += 1
+                                consecutive_wins = 0
+                                print(f"\n[RESULT] {curr_issue} LOSS (-{last_prediction['stake']:.0f}) | Loss Streak: {consecutive_losses}")
+                            
                             UI_HISTORY.appendleft({
                                 "period": curr_issue, 
                                 "pred": pred_label, 
                                 "result": last_win_status,
                                 "bankroll": round(current_bankroll, 2)
                             })
-                            
                         else:
-                            print(f"\n[RESULT] {curr_issue} was {real_outcome} (Skipped/Cooldown)")
+                            # It was a SKIP or COOLDOWN round
+                            print(f"\n[RESULT] {curr_issue} was {real_outcome} (We Skipped)")
+                            
+                            # If we were in cooldown, decrease the counter
                             if cooldown_counter > 0:
                                 cooldown_counter -= 1
-                                print(f"[COOL] Profit Lock Remaining: {cooldown_counter}")
+                                print(f"[COOL] Cooldown remaining: {cooldown_counter} periods")
+                                if cooldown_counter == 0:
+                                    print("[COOL] Cooldown Finished. Engines Restarting...")
 
                     # =========================================================
-                    # D. PROFIT LOCK (10 WINS -> PAUSE)
+                    # D. CIRCUIT BREAKER CHECK (TRIGGER LOGIC)
                     # =========================================================
-                    # Must be NOT in Ghost Mode to trigger this
-                    if consecutive_wins >= 10 and cooldown_counter == 0 and not ghost_mode_active:
-                        cooldown_counter = 6  # Pause 6 rounds
-                        consecutive_wins = 0  # Reset streak
-                        print(f"\n[PROFIT] 10 CONSECUTIVE WINS! Locking Profit. Cooling down 6 rounds.")
+                    # Only set new cooldown if we aren't already in one
+                    if cooldown_counter == 0:
+                        if consecutive_wins >= 5:
+                            cooldown_counter = 6  # Pause for 6 periods
+                            cooldown_reason = "PROFIT LOCK (5 Wins)"
+                            consecutive_wins = 0  # Reset streak so we don't trigger again immediately
+                            print(f"\n[TRIGGER] 5 WINS HIT! Engines cooling down for {cooldown_counter} rounds.")
+                            
+                        elif consecutive_losses >= 3:
+                            cooldown_counter = 8  # Pause for 8 periods (Safe Mode)
+                            cooldown_reason = "STOP LOSS (3 Loss)"
+                            consecutive_losses = 0
+                            print(f"\n[TRIGGER] 3 LOSSES HIT! Engines cooling down for {cooldown_counter} rounds.")
 
                     # =========================================================
-                    # E. NEXT PREDICTION
+                    # E. GENERATE NEXT PREDICTION
                     # =========================================================
                     if len(RAM_HISTORY) >= MIN_DATA_REQUIRED:
                         next_issue = str(int(curr_issue) + 1)
                         
-                        # Case 1: Cooldown Active
+                        # --- COOLDOWN ACTIVE? ---
                         if cooldown_counter > 0:
                             last_prediction = {
-                                "issue": next_issue, "label": "COOLDOWN", "stake": 0, "conf": 0,
-                                "level": "PAUSED", "reason": "Profit Lock (10 Wins)", "strategy": "REST"
+                                "issue": next_issue,
+                                "label": "COOLDOWN",
+                                "stake": 0,
+                                "conf": 0,
+                                "level": "PAUSED",
+                                "reason": f"{cooldown_reason} - Wait {cooldown_counter}",
+                                "strategy": "REST"
                             }
-                            print(f"[PRED] Target: {next_issue} | PROFIT LOCK ACTIVE")
-                            
-                        # Case 2: Normal / Ghost
+                            print(f"[PRED] Target: {next_issue} | PAUSED | {cooldown_reason}")
+                        
+                        # --- NORMAL OPERATION ---
                         else:
                             try:
                                 res = ultraAIPredict(list(RAM_HISTORY), current_bankroll, last_prediction['label'])
                                 
-                                final_stake = res['positionsize']
-                                final_level = res['level']
-                                final_reason = res.get('reason', '')
-                                
-                                # Override for Ghost Mode
-                                if ghost_mode_active:
-                                    final_stake = 0
-                                    final_level = "👻 GHOST"
-                                    final_reason = f"Virtual Test {virtual_win_streak}/2"
-                                
                                 last_prediction = {
                                     "issue": next_issue, 
                                     "label": res['finalDecision'], 
-                                    "stake": final_stake,
+                                    "stake": res['positionsize'],
                                     "conf": res['confidence'], 
-                                    "level": final_level, 
-                                    "reason": final_reason
+                                    "level": res['level'], 
+                                    "reason": res.get('reason', 'Analyzing Pattern...')
                                 }
-                                
-                                tag = "[GHOST]" if ghost_mode_active else "[REAL]"
-                                print(f"{tag} Target: {next_issue} | Decision: {last_prediction['label']} | Conf: {last_prediction['conf']:.0%}")
+                                print(f"[PRED] Target: {next_issue} | Decision: {last_prediction['label']} | Conf: {last_prediction['conf']:.0%}")
                             except Exception as e:
                                 print(f"[ENGINE ERROR] {e}")
                     else:
