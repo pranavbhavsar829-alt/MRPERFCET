@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Any, Tuple
 #  60 - 79 : "DISCIPLINED MODE" -> High quality signals only (Strong 2 or 3 Votes).
 #  80 - 100: "SNIPER MODE"   -> Perfection only. Will sleep often. (Requires 3+ Votes).
 # ------------------------------------------------------------------------------
-GLOBAL_STRICTNESS = 70 
+GLOBAL_STRICTNESS = 85 
 
 
 class GameConstants:
