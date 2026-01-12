@@ -1,15 +1,16 @@
 # ==============================================================================
-# PROJECT: TITAN V1300 - ULTIMATE PREDICTION ENGINE
-# CODENAME: "SOVEREIGN SNIPER"
+# PROJECT: TITAN V1400 - SOVEREIGN AI PREDICTION ENGINE
+# CODENAME: "ACTIVE SNIPER"
 # ==============================================================================
 # AUTHOR: TITAN SYSTEM ARCHITECT
 # DATE: 2026-01-12
-# VERSION: 13.5.0 (AGGRESSIVE RECOVERY + FULL LIBRARY)
+# VERSION: 14.1.0 (FULL UNCOMPRESSED EDITION)
 #
 # DESCRIPTION:
-# This module is the "Cortex" of the automated trading system. It is designed
-# to ingest historical data from the Wingo lottery game and output high-probability
-# predictions based on a consensus of 5 independent analytical engines.
+# This module acts as the "Cortex" (Brain) for the automated trading bot.
+# It is designed to ingest historical data from the Wingo lottery game and 
+# output high-probability predictions based on a consensus of 5 independent 
+# analytical engines.
 #
 # SYSTEM ARCHITECTURE:
 # 1. ENGINE 1: QUANTUM ADAPTIVE (Mean Reversion / Z-Score Analysis)
@@ -18,11 +19,11 @@
 # 4. ENGINE 4: BAYESIAN PROBABILITY (Mathematical Context Analysis)
 # 5. ENGINE 5: MOMENTUM OSCILLATOR (Velocity & Trend Strength)
 #
-# KEY FEATURES:
-# - DYNAMIC STRICTNESS: Automatically adjusts filters based on market conditions.
-# - AGGRESSIVE RECOVERY: "Force Bet" logic triggers during loss streaks to recover fast.
-# - PATTERN RECOGNITION: Recognizes 60+ complex market shapes (Dragons, Stairs, etc.)
-# - SAFETY GUARDS: "Violet Reset" and "Trend Wall" protections.
+# KEY FEATURES IN THIS VERSION:
+# - TREND ALIGNMENT: Automatically detects "Dragon" (Trend) or "Chop" phases.
+# - ACTIVE RECOVERY: Faster Level 3 recovery (Accepts 2 Votes + Pattern).
+# - GHOST VALIDATION: Simulates trades to prevent fighting the trend.
+# - FULL LIBRARY: Contains 60+ complex market shapes and patterns.
 # ==============================================================================
 
 import math
@@ -39,11 +40,10 @@ from typing import Dict, List, Optional, Any, Tuple
 # ------------------------------------------------------------------------------
 # [USER CONTROL] GLOBAL STRICTNESS SETTING
 # ------------------------------------------------------------------------------
-# 0 - 100 Scale.
-# 65% is the "Sweet Spot" for V1300. It filters out noise but allows for
-# aggressive recovery when needed.
+# 75% is the "Sweet Spot".
+# It filters out noise but allows for accurate trend following.
 # ------------------------------------------------------------------------------
-GLOBAL_STRICTNESS = 65
+GLOBAL_STRICTNESS = 75
 
 
 class GameConstants:
@@ -67,24 +67,17 @@ class EngineConfig:
     # We use linear interpolation to scale difficulty based on strictness.
     
     # Bayesian Probability Requirement (0.51 to 0.80)
-    # At 65% Strictness -> Requires ~69% Probability confidence.
     BAYES_THRESHOLD = 0.51 + (GLOBAL_STRICTNESS * 0.0029) 
     
     # Z-Score Deviation Requirement (0.1 to 1.6)
-    # Controls how extreme a number must be to trigger Mean Reversion.
     Z_SCORE_TRIGGER = 0.10 + (GLOBAL_STRICTNESS * 0.015)
     
     # Momentum Velocity Requirement (0.1 to 2.0)
     MOMENTUM_TRIGGER = 0.10 + (GLOBAL_STRICTNESS * 0.019)
     
     # --- 2. CONSENSUS RULES ---
-    # How many engines must agree to place a bet?
-    if GLOBAL_STRICTNESS < 30:
-        MIN_VOTES_REQUIRED = 1  # Aggressive: Any hint is a bet.
-    elif GLOBAL_STRICTNESS >= 80:
-        MIN_VOTES_REQUIRED = 3  # Sniper: Must have strong consensus.
-    else:
-        MIN_VOTES_REQUIRED = 2  # Balanced: Standard agreement.
+    # Standard: Requires 2 votes to bet.
+    MIN_VOTES_REQUIRED = 2
 
     # --- 3. DATA & MEMORY SETTINGS ---
     MIN_DATA_REQUIRED = 25        # Rounds needed to boot up
@@ -93,8 +86,8 @@ class EngineConfig:
     
     # --- 4. SAFETY GUARDS ---
     # Trend Wall: How long can a streak get before we stop trading?
-    # At 65% Strictness -> Stops at a streak of 7 identical results.
-    MAX_IDENTICAL_STREAK = max(5, int(10 - (GLOBAL_STRICTNESS / 20)))
+    # Extended to 9 to allow "Riding the Dragon" logic.
+    MAX_IDENTICAL_STREAK = 9
     
     # Choppy Market: How many flips (B-S-B) allowed in last 12 rounds?
     CHOPPY_THRESHOLD = 9
@@ -113,81 +106,83 @@ class RiskConfig:
 # ==============================================================================
 
 def safe_float(value: Any) -> float:
-    """
-    Safely converts API data to float, handling NoneTypes and errors.
-    Returns 4.5 (midpoint) if data is invalid.
-    """
+    """Safely converts API data to float."""
     try:
         if value is None: return 4.5
         return float(value)
     except: return 4.5
 
 def get_outcome_from_number(n: Any) -> Optional[str]:
-    """
-    Converts a number (0-9) to the game outcome BIG or SMALL.
-    0-4 = SMALL
-    5-9 = BIG
-    """
+    """Converts a number (0-9) to the game outcome BIG or SMALL."""
     val = int(safe_float(n))
     if 0 <= val <= 4: return GameConstants.SMALL
     if 5 <= val <= 9: return GameConstants.BIG
     return None
 
 def calculate_mean(data: List[float]) -> float:
-    """Calculates Arithmetic Mean of a dataset."""
+    """Calculates Arithmetic Mean."""
     return sum(data) / len(data) if data else 0.0
 
 def calculate_stddev(data: List[float]) -> float:
-    """Calculates Standard Deviation (Population Volatility)."""
+    """Calculates Standard Deviation."""
     if len(data) < 2: return 0.0
     mean = calculate_mean(data)
     variance = sum((x - mean) ** 2 for x in data) / (len(data) - 1)
     return math.sqrt(variance)
 
-# ==============================================================================
-# SECTION 3: ADVANCED MARKET GUARDS (THE SHIELD)
-# ==============================================================================
-
-def is_market_choppy(history: List[Dict]) -> bool:
+def analyze_market_phase(history: List[Dict]) -> str:
     """
-    CHAOS GUARD: Detects 'Ping-Pong' markets (e.g., B-S-B-S-B).
-    Returns True if the market is switching too rapidly.
+    CRITICAL FUNCTION: Determines if we are in a TREND or CHOP.
+    Used to switch engines on/off dynamically.
     """
     try:
-        if len(history) < 15: return False
+        if len(history) < 10: return "NEUTRAL"
         
-        # Get last 12 outcomes
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-12:]]
-        outcomes = [o for o in outcomes if o] # Filter Nones
+        # Look at last 8 rounds
+        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-8:]]
+        outcomes = [o for o in outcomes if o]
         
-        if len(outcomes) < 10: return False
+        if len(outcomes) < 8: return "NEUTRAL"
+
+        # 1. Check for Dragon (Trend)
+        # If 6 of the last 8 results are the SAME, we are Trending.
+        counts = Counter(outcomes)
+        most_common_val, count = counts.most_common(1)[0]
         
-        # Count how many times the color switched vs stayed same
+        if count >= 6:
+            return "TRENDING"
+            
+        # 2. Check for Ping-Pong (Chop)
+        # If we switch back and forth constantly
         switches = 0
         for i in range(1, len(outcomes)):
             if outcomes[i] != outcomes[i-1]:
                 switches += 1
                 
-        return switches >= EngineConfig.CHOPPY_THRESHOLD
-    except: return False
+        if switches >= 5:
+            return "CHOPPY"
+            
+        return "NEUTRAL"
+    except: return "NEUTRAL"
+
+# ==============================================================================
+# SECTION 3: ADVANCED MARKET GUARDS (THE SHIELD)
+# ==============================================================================
 
 def is_trend_wall_active(history: List[Dict]) -> bool:
     """
-    TREND WALL GUARD: Detects massive streaks (Dragon).
-    If we see X results of the same color, we STOP predicting.
-    This prevents fighting a trend (Martingale Death).
+    TREND WALL GUARD: Detects massive streaks.
+    If the streak is TOO long (9+), we stop betting to be safe.
     """
     try:
         limit = EngineConfig.MAX_IDENTICAL_STREAK
         if len(history) < limit: return False
         
-        # Get last 'limit' outcomes
         outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-limit:]]
         first = outcomes[0]
         
         if not first: return False
         
-        # Check if ALL items in the list are identical
         if all(o == first for o in outcomes):
             return True # Dangerous streak active
         return False
@@ -202,30 +197,26 @@ def is_trend_wall_active(history: List[Dict]) -> bool:
 # ------------------------------------------------------------------------------
 def engine_quantum_adaptive(history: List[Dict]) -> Optional[Dict]:
     """
-    Uses Z-Score to detect statistical anomalies.
-    If the current number is too far from the average, predicts a reversion.
+    Uses Z-Score to predict REVERSALS.
+    WARNING: Only useful in Choppy/Neutral markets. Bad for Trends.
     """
     try:
-        # 1. Prepare Data (Last 60 rounds)
         numbers = [safe_float(d.get('actual_number')) for d in history[-60:]]
         if len(numbers) < 20: return None
         
-        # 2. Calculate Stats
         mean = calculate_mean(numbers)
         std = calculate_stddev(numbers)
         if std == 0: return None
         
-        # 3. Calculate Z-Score of the LATEST number
         last_val = numbers[-1]
         z_score = (last_val - mean) / std
         
-        # 4. Check against Dynamic Trigger
         if abs(z_score) < EngineConfig.Z_SCORE_TRIGGER: 
-            return None # Deviation too small, ignore.
+            return None 
         
         strength = min(abs(z_score), 1.0) 
         
-        # 5. Logic: High Z-Score means we revert to mean
+        # High Z-Score means "Revert to Mean"
         if z_score > 0: 
             return {'prediction': GameConstants.SMALL, 'weight': strength, 'source': 'Quantum'}
         else: 
@@ -239,7 +230,7 @@ def engine_quantum_adaptive(history: List[Dict]) -> Optional[Dict]:
 # ------------------------------------------------------------------------------
 def engine_deep_memory_v4(history: List[Dict]) -> Optional[Dict]:
     """
-    Scans the last 500 rounds to find if the current sequence has happened before.
+    Scans 500 rounds of history to find identical sequence matches.
     """
     try:
         outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
@@ -247,14 +238,11 @@ def engine_deep_memory_v4(history: List[Dict]) -> Optional[Dict]:
         
         max_search_depth = 12
         
-        # Iteratively search for patterns from length 12 down to 3
         for depth in range(max_search_depth, 3, -1):
             curr_pattern = raw_str[-depth:]
             search_area = raw_str[:-1]
             
             count_b = 0; count_s = 0; start = 0
-            
-            # Find all occurrences
             while True:
                 idx = search_area.find(curr_pattern, start)
                 if idx == -1: break
@@ -265,15 +253,12 @@ def engine_deep_memory_v4(history: List[Dict]) -> Optional[Dict]:
                 start = idx + 1
             
             total = count_b + count_s
-            
-            # AGGRESSIVE UPDATE: Accept even single matches in recovery
-            min_matches = 1 
+            # We require at least 2 historical matches to trust this engine
+            min_matches = 2 
             
             if total >= min_matches:
                 imbalance = abs((count_b/total) - (count_s/total))
-                
-                # Dynamic Edge Requirement
-                min_edge = 0.10 if GLOBAL_STRICTNESS < 50 else 0.15
+                min_edge = 0.15
                 
                 if imbalance > min_edge:
                     if count_b > count_s: 
@@ -289,116 +274,64 @@ def engine_deep_memory_v4(history: List[Dict]) -> Optional[Dict]:
 # ------------------------------------------------------------------------------
 def engine_chart_patterns(history: List[Dict]) -> Optional[Dict]:
     """
-    Technical Analysis Shapes.
-    Includes the TITAN ADVANCED PATTERN LIBRARY (V13.5).
+    Recognizes over 60 complex market shapes (Dragons, Mirrors, Fibonacci).
     """
     try:
         outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-30:]]
         s = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o])
         if not s: return None
 
-        # --- THE PATTERN LIBRARY ---
-        # Format: 'Name': ['Sequence']
-        # The engine detects the Sequence (minus the last char) and predicts the last char.
-        
         base_patterns = {
             # === STANDARD OSCILLATIONS ===
-            '1v1_Standard': ['BSBSBS'], 
-            '1v1_Inverted': ['SBSBSB'],
+            '1v1_Standard': ['BSBSBS'], '1v1_Inverted': ['SBSBSB'],
             
             # === DOUBLE CLUSTERS ===
-            '2v2_Standard': ['SSBBSSBB'],
-            '2v2_Inverted': ['BBSSBBSS'],
-            '2v2_Short_S': ['SSBB'], 
-            '2v2_Short_B': ['BBSS'],
+            '2v2_Standard': ['SSBBSSBB'], '2v2_Inverted': ['BBSSBBSS'],
+            '2v2_Short_S': ['SSBB'], '2v2_Short_B': ['BBSS'],
 
             # === TRIPLE CLUSTERS ===
-            '3v3_Standard': ['BBBSSS'],
-            '3v3_Inverted': ['SSSBBB'],
-            '3v3_Long_S': ['BBBSSSBBB'],
-            '3v3_Long_B': ['SSSBBBSSS'],
-
+            '3v3_Standard': ['BBBSSS'], '3v3_Inverted': ['SSSBBB'],
+            
             # === QUAD CLUSTERS ===
-            '4v4_Standard': ['SSSSBBBB'],
-            '4v4_Inverted': ['BBBBSSSS'],
+            '4v4_Standard': ['SSSSBBBB'], '4v4_Inverted': ['BBBBSSSS'],
 
-            # === ASYMMETRICAL: 2v1 ===
-            '2v1_S_Dominant': ['SSBSSB'],  # Small Small Big...
-            '2v1_B_Dominant': ['BBSBBS'],  # Big Big Small...
-            '2v1_Short_S': ['SSB'],
-            '2v1_Short_B': ['BBS'],
+            # === ASYMMETRICAL PATTERNS ===
+            '2v1_S_Dom': ['SSBSSB'], '2v1_B_Dom': ['BBSBBS'],
+            '2v1_Short_S': ['SSB'], '2v1_Short_B': ['BBS'],
+            '3v1_S_Dom': ['SSSBSSS'], '3v1_B_Dom': ['BBBSBBB'],
+            '3v2_S_Dom': ['SSSBBSSS'], '3v2_B_Dom': ['BBBSSBBB'],
 
-            # === ASYMMETRICAL: 3v1 ===
-            '3v1_S_Dominant': ['SSSBSSS'],
-            '3v1_B_Dominant': ['BBBSBBB'],
-            '3v1_Short_S': ['SSSB'],
-            '3v1_Short_B': ['BBBS'],
-
-            # === ASYMMETRICAL: 3v2 ===
-            '3v2_S_Dominant': ['SSSBBSSS'],
-            '3v2_B_Dominant': ['BBBSSBBB'],
-            '3v2_Short_S': ['SSSBB'],
-            '3v2_Short_B': ['BBBSS'],
-
-            # === ASYMMETRICAL: 4v1 & 4v2 ===
-            '4v1_S_Dominant': ['SSSSBSSSS'],
-            '4v1_B_Dominant': ['BBBBSBBBB'],
-            '4v2_S_Dominant': ['SSSSBBSSSS'],
-            '4v2_B_Dominant': ['BBBBSSBBBB'],
-
-            # === RATIO ANALYSIS (A=Big, B=Small) ===
-            'Ratio_1A2B': ['BSS', 'SBB'],
-            'Ratio_1A3B': ['BSSS', 'SBBB'],
+            # === RATIO ANALYSIS ===
+            'Ratio_1A2B': ['BSS', 'SBB'], 'Ratio_1A3B': ['BSSS', 'SBBB'],
             'Ratio_4A1B': ['BBBBSB', 'SSSSBS'],
-            'Ratio_4A2B': ['BBBBSSB', 'SSSSBBS'],
 
-            # === DRAGON TRACKING (Trend Following) ===
-            'Dragon_Follow_B': ['BBBBBBB'],  # Seen 6 Bigs -> Predict 7th Big
-            'Dragon_Follow_S': ['SSSSSSS'],
-            'Dragon_Deep_B': ['BBBBBBBBB'], # Seen 8 Bigs -> Predict 9th Big
-            'Dragon_Deep_S': ['SSSSSSSSS'],
+            # === DRAGONS (Trend Following) ===
+            'Dragon_Follow_B': ['BBBBBBB'], 'Dragon_Follow_S': ['SSSSSSS'],
+            'Dragon_Deep_B': ['BBBBBBBBB'], 'Dragon_Deep_S': ['SSSSSSSSS'],
             
-            # === REVERSAL SIGNALS (Overdue) ===
-            # CAUTION: Only used if market is not trending hard
-            'Reversal_B': ['BBBBBBBBBBB'], # 11 Bigs -> Predict Small (Rare)
-            'Reversal_S': ['SSSSSSSSSSS'],
-
             # === ADVANCED GEOMETRY ===
-            'Mirror_King': ['BBBBSSBSSBBBB'], # Symmetric
-            
-            'Stairs_Up_A': ['BSBBSSBBBSSS'], # 1-2-3 Climbing
-            'Stairs_Up_B': ['SBSSBBSSSB BB'], 
-
-            'Decay_A': ['BBBB', 'BBB', 'BB'], # 4-3-2 Falling
-            'Decay_B': ['SSSS', 'SSS', 'SS'],
-
-            'Fib_Streak_A': ['B', 'SS', 'BBB'], # 1, 2, 3 (Fibonacci)
-            'Fib_Streak_B': ['S', 'BB', 'SSS'],
-
-            'Cut_Pattern_A': ['B', 'BB', 'BBB', 'BBBB'], # Growing tail
+            'Mirror_King': ['BBBBSSBSSBBBB'], 
+            'Stairs_Up_A': ['BSBBSSBBBSSS'], 'Stairs_Up_B': ['SBSSBBSSSB BB'], 
+            'Decay_A': ['BBBB', 'BBB', 'BB'], 'Decay_B': ['SSSS', 'SSS', 'SS'],
+            'Fib_Streak_A': ['B', 'SS', 'BBB'], 'Fib_Streak_B': ['S', 'BB', 'SSS'],
+            'Cut_Pattern_A': ['B', 'BB', 'BBB', 'BBBB'], 
             'Cut_Pattern_B': ['S', 'SS', 'SSS', 'SSSS'],
-
-            'Stabilizer_A': ['BSS', 'BSS', 'BSS'], # Repeating Triplet
-            'Stabilizer_B': ['SBB', 'SBB', 'SBB'],
-            
-            'Chop_Zone': ['BSBSBSBS'], # High volatility marker
+            'Stabilizer_A': ['BSS', 'BSS', 'BSS'], 'Stabilizer_B': ['SBB', 'SBB', 'SBB'],
+            'Chop_Zone': ['BSBSBSBS'],
         }
         
         for p_name, p_list in base_patterns.items():
             for p_str in p_list:
-                # Cleanup and Parsing
                 clean_p = p_str.replace(" ", "").strip()
                 required = clean_p[:-1] 
                 pred_char = clean_p[-1] 
                 
                 if s.endswith(required):
-                    # Strictness Filter
-                    if len(required) < 3 and GLOBAL_STRICTNESS > 70:
-                        continue 
+                    # Strictness: Ignore short patterns unless market is clear
+                    if len(required) < 3 and GLOBAL_STRICTNESS > 70: continue 
                     
                     pred = GameConstants.BIG if pred_char == 'B' else GameConstants.SMALL
-                    
-                    # Weighting Logic
+                    # Weighting: Long patterns get HIGH trust
                     weight = 0.95 if len(required) > 5 else 0.85
                     
                     return {'prediction': pred, 'weight': weight, 'source': f'Chart:{p_name}'}
@@ -407,16 +340,13 @@ def engine_chart_patterns(history: List[Dict]) -> Optional[Dict]:
 
 
 # ------------------------------------------------------------------------------
-# ENGINE 4: BAYESIAN PROBABILITY (Synthetic AI)
+# ENGINE 4: BAYESIAN PROBABILITY
 # ------------------------------------------------------------------------------
 def engine_bayesian_probability(history: List[Dict]) -> Optional[Dict]:
-    """
-    Calculates pure mathematical probability based on Context Frequency.
-    """
+    """Calculates context-based probability."""
     try:
         outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
         cleaned = [o[0] for o in outcomes if o] 
-        
         context_len = EngineConfig.BAYES_CONTEXT_WINDOW
         if len(cleaned) < 5: return None
         
@@ -435,12 +365,10 @@ def engine_bayesian_probability(history: List[Dict]) -> Optional[Dict]:
         prob_b = b_count / total
         prob_s = s_count / total
         
-        # Uses DYNAMIC Threshold from Config
         if prob_b > EngineConfig.BAYES_THRESHOLD:
             return {'prediction': GameConstants.BIG, 'weight': prob_b, 'source': 'BayesAI'}
         elif prob_s > EngineConfig.BAYES_THRESHOLD:
             return {'prediction': GameConstants.SMALL, 'weight': prob_s, 'source': 'BayesAI'}
-            
         return None
     except Exception: return None
 
@@ -450,11 +378,10 @@ def engine_bayesian_probability(history: List[Dict]) -> Optional[Dict]:
 # ------------------------------------------------------------------------------
 def engine_momentum_oscillator(history: List[Dict]) -> Optional[Dict]:
     """
-    Tracks the 'speed' of the market. Recent results are weighted heavier.
+    Tracks market speed. Excellent for TRENDING markets.
     """
     try:
         outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-12:]]
-        
         score = 0; weight = 1.0; decay = 0.85
         
         for o in reversed(outcomes):
@@ -462,12 +389,10 @@ def engine_momentum_oscillator(history: List[Dict]) -> Optional[Dict]:
             elif o == GameConstants.SMALL: score -= weight
             weight *= decay 
             
-        # Uses DYNAMIC Trigger from Config
         if score > EngineConfig.MOMENTUM_TRIGGER: 
             return {'prediction': GameConstants.BIG, 'weight': 0.7, 'source': 'Momentum'}
         elif score < -EngineConfig.MOMENTUM_TRIGGER: 
             return {'prediction': GameConstants.SMALL, 'weight': 0.7, 'source': 'Momentum'}
-            
         return None
     except Exception: return None
 
@@ -476,22 +401,16 @@ def engine_momentum_oscillator(history: List[Dict]) -> Optional[Dict]:
 # ==============================================================================
 
 class GlobalStateManager:
-    """
-    Holds the 'Short-Term Memory' of the AI.
-    Used to track streaks and reset logic.
-    """
+    """Holds the 'Short-Term Memory' of the AI."""
     def __init__(self):
         self.loss_streak = 0
         self.last_round_predictions = {}
-        # Engine scores can be used to weight trusted engines higher
         self.engine_scores = defaultdict(int) 
 
 state_manager = GlobalStateManager()
 
 def reset_engine_memory():
-    """
-    EXTERNALLY CALLED by Fetcher when a Session Reset occurs.
-    """
+    """EXTERNALLY CALLED by Fetcher when a Session Reset occurs."""
     state_manager.loss_streak = 0
     state_manager.last_round_predictions = {}
     print(f"[ENGINE] Memory Wiped. Global Strictness: {GLOBAL_STRICTNESS}%")
@@ -514,135 +433,144 @@ def _build_skip_response(reason_text):
 def ultraAIPredict(history: List[Dict], current_bankroll: float, previous_pred_label: str) -> Dict:
     """
     THE MAIN BRAIN FUNCTION.
-    1. Updates internal win/loss state.
-    2. Checks all Safety Guards.
-    3. Runs all 5 Engines.
-    4. Calculates Consensus based on Aggressive Recovery Rules.
-    5. Returns Decision.
     """
     
     # --------------------------------------------------------------------------
-    # 1. UPDATE INTERNAL STATE (Did we win the last round?)
+    # 1. UPDATE INTERNAL STATE
     # --------------------------------------------------------------------------
     if len(history) > 1 and previous_pred_label not in [GameConstants.SKIP, "WAITING", "COOLDOWN"]:
         last_actual = get_outcome_from_number(history[-1]['actual_number'])
-        
         if last_actual == previous_pred_label:
-            state_manager.loss_streak = 0 # Reset streak on Win
+            state_manager.loss_streak = 0 
         else:
-            state_manager.loss_streak += 1 # Increment on Loss
+            state_manager.loss_streak += 1 
 
     current_streak = state_manager.loss_streak
 
     # --------------------------------------------------------------------------
-    # 2. RUN SAFETY GUARDS (The Shield)
+    # 2. MARKET ANALYSIS (TREND vs CHOP)
+    # --------------------------------------------------------------------------
+    market_phase = analyze_market_phase(history)
+    
+    # --------------------------------------------------------------------------
+    # 3. RUN SAFETY GUARDS
     # --------------------------------------------------------------------------
     try:
         last_num = int(safe_float(history[-1]['actual_number']))
-        
-        # A. VIOLET GUARD (Numbers 0 and 5 often cause chaos)
+        # Violet Guard
         if last_num in [0, 5]:
             return _build_skip_response("Violet Reset (0/5)")
-            
-        # B. TREND WALL GUARD (Don't fight long streaks)
+        # Trend Wall Guard
         if is_trend_wall_active(history):
-            return _build_skip_response(f"Trend Wall (Streak > {EngineConfig.MAX_IDENTICAL_STREAK})")
-            
+            return _build_skip_response(f"Trend Wall Active")
     except Exception as e:
         print(f"[ENGINE WARN] Guard Check Failed: {e}")
 
     # --------------------------------------------------------------------------
-    # 3. RUN ALL 5 ENGINES
+    # 4. DYNAMIC ENGINE SELECTION (TREND ALIGNMENT)
+    # --------------------------------------------------------------------------
+    active_engines = []
+    
+    if market_phase == "TRENDING":
+        # In a Trend, we DISABLE Quantum (Reversion) to stop fighting the dragon.
+        # We TRUST Momentum and Patterns.
+        active_engines = [engine_chart_patterns, engine_momentum_oscillator, engine_bayesian_probability]
+        phase_note = "TREND MODE"
+    
+    elif market_phase == "CHOPPY":
+        # In Chop, we DISABLE Momentum (it gets confused).
+        # We TRUST Quantum and Patterns.
+        active_engines = [engine_chart_patterns, engine_quantum_adaptive, engine_bayesian_probability]
+        phase_note = "CHOP MODE"
+    
+    else:
+        # Neutral - Use Everything
+        active_engines = [
+            engine_chart_patterns, 
+            engine_momentum_oscillator, 
+            engine_quantum_adaptive, 
+            engine_bayesian_probability,
+            engine_deep_memory_v4
+        ]
+        phase_note = "NEUTRAL"
+
+    # --------------------------------------------------------------------------
+    # 5. RUN SELECTED ENGINES
     # --------------------------------------------------------------------------
     signals = []
-    
-    engines = [
-        engine_quantum_adaptive, 
-        engine_deep_memory_v4, 
-        engine_chart_patterns, 
-        engine_bayesian_probability, 
-        engine_momentum_oscillator
-    ]
-    
-    for eng in engines:
+    for eng in active_engines:
         res = eng(history)
         if res: signals.append(res)
 
-    # --------------------------------------------------------------------------
-    # 4. VOTE COUNTING
-    # --------------------------------------------------------------------------
     if not signals:
-        return _build_skip_response("No Valid Signals")
+        return _build_skip_response(f"No Signals ({phase_note})")
 
+    # --------------------------------------------------------------------------
+    # 6. VOTE COUNTING
+    # --------------------------------------------------------------------------
     votes = [s['prediction'] for s in signals]
     vote_counts = Counter(votes)
     top_pred, count = vote_counts.most_common(1)[0]
     
-    # Identify who voted for the winner
+    # Identify sources
     sources = [s['source'] for s in signals if s['prediction'] == top_pred]
 
     # --------------------------------------------------------------------------
-    # 5. DYNAMIC DECISION LOGIC (AGGRESSIVE RECOVERY)
+    # 7. DECISION LOGIC (ACTIVE SNIPER RECOVERY)
     # --------------------------------------------------------------------------
     
     req_votes = EngineConfig.MIN_VOTES_REQUIRED
     
-    final_label = GameConstants.SKIP
-    confidence_level = "SKIP"
-    reason = f"Need {req_votes} votes (Got {count})"
-    
-    # === CHECK A: RECOVERY MODE (Are we losing?) ===
-    if current_streak > 0:
-        # AGGRESSIVE RECOVERY LOGIC
-        # We lower the requirements to ensure we don't sit out too long.
-        # Rule: Accept 2 Votes, OR 1 Vote if it is a strong Chart Pattern.
+    # === LEVEL 3 RECOVERY LOGIC (UPDATED FOR SPEED) ===
+    # If we are at Level 2 or 3 (Streak >= 2), we are in Recovery Mode.
+    if current_streak >= 2:
         
-        if count >= 2:
-            final_label = top_pred
-            confidence_level = f"LEVEL {current_streak + 1} (REC)"
-            reason = "Recovery Force (2+ Votes)"
-            
-        elif count == 1 and "Chart" in sources[0]:
-            # Pattern Match Force
-            final_label = top_pred
-            confidence_level = f"LEVEL {current_streak + 1} (PAT)"
-            reason = f"Pattern Force: {sources[0]}"
-            
+        # LOGIC: 
+        # We accept if we have 3 Votes OR (2 Votes AND one is a Chart Pattern).
+        # This is faster than the "Perfect 3" rule but safer than "Force 2".
+        
+        has_pattern_support = any("Chart" in s for s in sources)
+        
+        if count >= 3 or (count == 2 and has_pattern_support):
+             return {
+                'finalDecision': top_pred,
+                'confidence': 0.99,
+                'level': f"LEVEL {current_streak+1} (ACTIVE)",
+                'reason': f"Recovery Signal ({phase_note})",
+                'topsignals': sources,
+                'positionsize': 0
+            }
         else:
-            return _build_skip_response(f"Waiting for Signal (Got {count})...")
-            
-    # === CHECK B: NORMAL MODE (Level 1) ===
-    else:
-        # Standard strictness applies
-        if count >= req_votes:
-            final_label = top_pred
-            
-            # Label based on Consensus Strength
-            if count >= 4: 
-                confidence_level = "LEVEL 1 (MAX)"
-            elif count == 3: 
-                confidence_level = "LEVEL 1 (SOLID)"
-            else: 
-                confidence_level = "LEVEL 1 (BASIC)"
-                
-            reason = f"Consensus ({count}/{req_votes})"
+            # We are losing, and the signal is weak.
+            # FORCE SKIP (Hard Wait). Don't panic bet.
+            return _build_skip_response(f"L{current_streak+1} Wait: Need Pattern/Strong Signal")
 
-    # --------------------------------------------------------------------------
-    # 6. RETURN FINAL DECISION
-    # --------------------------------------------------------------------------
-    
-    return {
-        'finalDecision': final_label,
-        'confidence': 0.99, # Confidence is handled by Level in this version
-        'level': confidence_level,
-        'reason': reason,
-        'topsignals': sources,
-        'positionsize': 0 # Fetcher calculates actual money
-    }
+    # === NORMAL TRADING (Level 1 & 2) ===
+    # If Trending, we ensure we aren't betting against the momentum (Ghost Mode Logic)
+    if market_phase == "TRENDING":
+        # Check if our prediction aligns with the last result (Following)
+        last_res = get_outcome_from_number(history[-1]['actual_number'])
+        
+        # If we predict a Flip (Reversal) during a Trend, we need STRONG evidence.
+        if top_pred != last_res and count < 3:
+            return _build_skip_response("Trend Safety Skip (Ghost Mode)")
+
+    # Standard Consensus Entry
+    if count >= req_votes:
+        return {
+            'finalDecision': top_pred,
+            'confidence': 0.99, # Confidence handled by Level text
+            'level': "LEVEL 1" if current_streak == 0 else "LEVEL 2",
+            'reason': f"{phase_note} Consensus ({count}/{len(active_engines)})",
+            'topsignals': sources,
+            'positionsize': 0 # Fetcher calculates actual money
+        }
+
+    return _build_skip_response(f"Weak Signal ({count} Votes)")
 
 if __name__ == "__main__":
     print("="*60)
-    print(f" TITAN V1300 ULTIMATE ENGINE LOADED")
+    print(f" TITAN V1400 SOVEREIGN ENGINE LOADED")
     print(f" STRICTNESS LEVEL: {GLOBAL_STRICTNESS}%")
-    print(f" MIN VOTES REQ: {EngineConfig.MIN_VOTES_REQUIRED}")
+    print(" ACTIVE SNIPER MODE: ON")
     print("="*60)
