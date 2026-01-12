@@ -13,7 +13,7 @@ print(TITLE)
 print("UPDATES: Hardcoded 'BIG' Removed | Smart Fallback Active | 60/40 Ratio Logic")
 print("=" * 80)
 
-# GLOBAL CONSTANTS
+# h GLOBAL CONSTANTS
 GLOBAL_STRICTNESS = 65
 
 class GameConstants:
