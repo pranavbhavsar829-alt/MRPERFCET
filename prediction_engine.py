@@ -1,135 +1,78 @@
+#!/usr/bin/env python3
+"""
+=============================================================================
+  _______ _____ _______ _    _  _   _ 
+ |__   __|_   _|__   __| |  | || \ | |
+    | |    | |    | |  | |  | ||  \| |
+    | |    | |    | |  | |  | || . ` |
+    | |   _| |_   | |  | |__| || |\  |
+    |_|  |_____|  |_|   \____/ |_| \_|
+                                      
+  TITAN V200 - THE TRIDENT CORE (NEURAL EDITION)
+  (Streamlined: Quantum + Pattern + Neural)
+=============================================================================
+"""
+
 import math
 import statistics
 import random
-import time
-import numpy as np
-from scipy import stats
-from collections import Counter, defaultdict, deque
+import traceback
+from collections import Counter, defaultdict
 from typing import Dict, List, Optional, Any, Tuple
 
-TITLE = "TITAN V3.2 BIAS KILLER - SMART BALANCED LOGIC"
-print("=" * 80)
-print(TITLE)
-print("UPDATES: Hardcoded 'BIG' Removed | Smart Fallback Active | 60/40 Ratio Logic")
-print("=" * 80)
-
-# h GLOBAL CONSTANTS
-GLOBAL_STRICTNESS = 65
+# =============================================================================
+# SECTION 1: IMMUTABLE GAME CONSTANTS
+# =============================================================================
 
 class GameConstants:
     BIG = "BIG"
-    SMALL = "SMALL"
+    SMALL = "SMALL" 
     SKIP = "SKIP"
-    STATUS_WAITING = "WAITING"
-    STATUS_ANALYZING = "ANALYZING"
-    STATUS_LOCKED = "LOCKED"
-
-class EngineConfig:
-    BAYES_THRESHOLD = 0.51
-    ZSCORE_TRIGGER = 0.08 * GLOBAL_STRICTNESS / 50 
-    MOMENTUM_TRIGGER = 0.08 * GLOBAL_STRICTNESS / 50 
-    MARKOV_THRESHOLD = 0.52 
-    KELLY_THRESHOLD = 0.52   
     
-    if GLOBAL_STRICTNESS < 30:
-        MIN_VOTES_REQUIRED = 1
-    elif GLOBAL_STRICTNESS > 80:
-        MIN_VOTES_REQUIRED = 3
-    else:
-        MIN_VOTES_REQUIRED = 2
+    # We need decent history for the Neural Engine to warm up
+    MIN_HISTORY_FOR_PREDICTION = 40
+    DEBUG_MODE = True
 
-    MIN_DATA_REQUIRED = 25
-    DEEP_MEM_LOOKBACK = 2000
-    BAYES_CONTEXT_WINDOW = 5
-    MAX_IDENTICAL_STREAK = max(6, int(12 - GLOBAL_STRICTNESS / 20)) 
-    CHOPPY_THRESHOLD = 11  
-    HURST_WINDOW = 100
-    MONTE_CARLO_SIMS = 2000
-    CHI2_ALPHA = 0.01
+# =============================================================================
+# SECTION 2: RISK & SNIPER CONFIGURATION
+# =============================================================================
 
 class RiskConfig:
-    BASE_RISK_PERCENT = 0.025 
+    # -------------------------------------------------------------------------
+    # BANKROLL MANAGEMENT
+    # -------------------------------------------------------------------------
+    BASE_RISK_PERCENT = 0.03    # Increased to 3% (Since we have higher quality signals)
     MIN_BET_AMOUNT = 50
     MAX_BET_AMOUNT = 50000
-    STOP_LOSS_PCT = 0.25      
-    PROFIT_TAKE_PCT = 0.35    
+    
+    # -------------------------------------------------------------------------
+    # CONFIDENCE THRESHOLDS (The Trident Logic)
+    # -------------------------------------------------------------------------
+    # Since we only have 3 engines, we need high agreement or ONE very strong signal.
+    
+    # LEVEL 1: Standard
+    LVL1_MIN_CONFIDENCE = 0.60  # 60% (Usually means 2 out of 3 agree)
+    
+    # LEVEL 2: Recovery (After 1 Loss)
+    # We lowered this from 0.80 to 0.70 per your request to be more aggressive
+    LVL2_MIN_CONFIDENCE = 0.70  
+    
+    # LEVEL 3: SNIPER (After 2+ Losses)
+    # Requires near unanimity
+    LVL3_MIN_CONFIDENCE = 0.85 
 
-# === GLOBAL STATE MANAGER ===
-class GlobalStateManager:
-    def __init__(self):
-        self.loss_streak = 0
-        self.win_streak = 0
-        self.last_round_predictions = []
-        self.consecutive_wins = 0
-        self.consecutive_losses = 0
-        self.total_bets = 0
-        self.engine_performance = defaultdict(lambda: {'wins': 0, 'total': 0, 'accuracy': 0.5})
-        self.market_regime = 'UNKNOWN'
-        self.bankroll = 10000.0
-        self.peak_bankroll = 10000.0
-        self.transition_matrix = np.zeros((2, 2))
-        self.counts_matrix = np.zeros((2, 2))
-        self.total_rounds = 0
-        self.rng_bias_detected = False
-        self.aggressive_mode = 0  # 0=Normal, 1=After1Loss, 2=After2Loss, 3=FullPower
+    # -------------------------------------------------------------------------
+    # MARTINGALE STEPS
+    # -------------------------------------------------------------------------
+    TIER_1_MULT = 1.0
+    TIER_2_MULT = 1.5   # Soft Recovery
+    TIER_3_MULT = 3.5   # Aggressive Recovery (Kill shot)
+    STOP_LOSS_STREAK = 5 # Extended to 5 to give the Neural Engine room to work
 
-    def get_strictness_level(self) -> float:
-        """PROGRESSIVE STRICTNESS: Loss1=10%, Loss2=20bets, Loss3=Full"""
-        if self.consecutive_losses == 0:
-            return 1.0  # NORMAL
-        elif self.consecutive_losses == 1:
-            return 0.90  # 10% STRICT - MOST BETS
-        elif self.total_bets < 20:
-            return 0.80  # 20 BETS MAX STRICTNESS
-        else:
-            return 0.60  # FULL POWER AFTER 20 BETS
-        return 1.0
+# =============================================================================
+# SECTION 3: MATHEMATICAL UTILITIES
+# =============================================================================
 
-    def update_transition_matrix(self, history: List[Dict]):
-        bs_numeric = [1 if get_outcome_from_number(d.get('actual_number')) == GameConstants.BIG else 0 
-                     for d in history[-500:] if get_outcome_from_number(d.get('actual_number'))]
-        if len(bs_numeric) < 20: return
-        
-        self.counts_matrix = np.zeros((2, 2))
-        for i in range(len(bs_numeric)-1):
-            self.counts_matrix[bs_numeric[i], bs_numeric[i+1]] += 1
-        self.transition_matrix = np.divide(self.counts_matrix, 
-                                         self.counts_matrix.sum(axis=1, keepdims=True) + 1e-8)
-
-    def chi_square_bias_test(self, history: List[Dict]) -> float:
-        numbers = [safe_float(d.get('actual_number')) for d in history[-500:] if safe_float(d.get('actual_number')) >= 0]
-        if len(numbers) < 100: return 1.0
-        
-        observed, _ = np.histogram(numbers, bins=10, range=(0,10))
-        expected = np.full(10, len(numbers)/10)
-        chi2 = np.sum((observed - expected)**2 / (expected + 1e-8))
-        p_value = 1 - stats.chi2.cdf(chi2, df=9)
-        self.rng_bias_detected = p_value < EngineConfig.CHI2_ALPHA
-        return p_value
-
-    def update_engine_performance(self, engine_sources: List[str], was_correct: bool):
-        for source in engine_sources:
-            self.engine_performance[source]['total'] += 1
-            if was_correct:
-                self.engine_performance[source]['wins'] += 1
-            self.engine_performance[source]['accuracy'] = (
-                self.engine_performance[source]['wins'] / max(1, self.engine_performance[source]['total']))
-
-    def get_engine_weight(self, engine_name: str) -> float:
-        strict_mod = self.get_strictness_level()
-        acc = self.engine_performance[engine_name]['accuracy']
-        return min(3.0, (acc / 0.5) * strict_mod)
-
-    def kelly_fraction(self, win_prob: float, odds: float = 1.95) -> float:
-        if win_prob <= 0.5: return 0.0
-        q = 1 - win_prob
-        f = (win_prob * odds - 1) / (odds - 1)
-        aggressive_f = f * 0.75 * self.get_strictness_level()  # PROGRESSIVE SIZING
-        return max(0.015, min(0.35, aggressive_f))  # WIDER RANGE
-
-statemanager = GlobalStateManager()
-
-# === UTILITY FUNCTIONS ===
 def safe_float(value: Any) -> float:
     try:
         if value is None: return 4.5
@@ -137,464 +80,320 @@ def safe_float(value: Any) -> float:
     except: return 4.5
 
 def get_outcome_from_number(n: Any) -> Optional[str]:
-    val = safe_float(n)
+    val = int(safe_float(n))
     if 0 <= val <= 4: return GameConstants.SMALL
     if 5 <= val <= 9: return GameConstants.BIG
     return None
 
+def sigmoid(x):
+    """The Activation Function for our Neural Engine."""
+    # Converts any number into a probability between 0 and 1
+    try:
+        return 1 / (1 + math.exp(-x))
+    except OverflowError:
+        return 0.0 if x < 0 else 1.0
+
 def calculate_mean(data: List[float]) -> float:
     return sum(data) / len(data) if data else 0.0
 
-def calculate_std_dev(data: List[float]) -> float:
+def calculate_stddev(data: List[float]) -> float:
     if len(data) < 2: return 0.0
     mean = calculate_mean(data)
     variance = sum((x - mean) ** 2 for x in data) / (len(data) - 1)
     return math.sqrt(variance)
 
-# === RELAXED SAFETY GUARDS ===
-def is_market_choppy(history: List[Dict]) -> bool:
-    if statemanager.consecutive_losses < 2:
-        return False
-    try:
-        if len(history) < 15: return False
-        outcomes = [get_outcome_from_number(d.get('actual_number'))
-                   for d in history[-12:] if get_outcome_from_number(d.get('actual_number'))]
-        if len(outcomes) < 10: return False
-        switches = sum(1 for i in range(1, len(outcomes)) if outcomes[i] != outcomes[i-1])
-        return switches >= EngineConfig.CHOPPY_THRESHOLD
-    except: return False
+def calculate_rsi(data: List[float], period: int = 14) -> float:
+    if len(data) < period + 1: return 50.0
+    deltas = [data[i] - data[i-1] for i in range(1, len(data))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = calculate_mean(gains[-period:])
+    avg_loss = calculate_mean(losses[-period:])
+    if avg_loss == 0: return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
 
-def is_trend_wall_active(history: List[Dict]) -> bool:
-    if statemanager.consecutive_losses < 2:
-        return False
-    try:
-        limit = EngineConfig.MAX_IDENTICAL_STREAK + 1 
-        if len(history) < limit: return False
-        outcomes = [get_outcome_from_number(d.get('actual_number'))
-                   for d in history[-limit:] if get_outcome_from_number(d.get('actual_number'))]
-        if not outcomes: return False
-        first = outcomes[0]
-        return all(o == first for o in outcomes)
-    except: return False
+# =============================================================================
+# SECTION 4: THE TRIDENT ENGINES (MAX POWER)
+# =============================================================================
 
-# === 12 CORE ENGINES ===
+# -----------------------------------------------------------------------------
+# ENGINE 1: QUANTUM AI (ADAPTIVE BOLLINGER)
+# -----------------------------------------------------------------------------
 def engine_quantum_adaptive(history: List[Dict]) -> Optional[Dict]:
+    """
+    detects 'Reversion to Mean'.
+    UPGRADE: Uses Dynamic Sigma. 
+    If market is quiet, it requires 2.0 Sigma.
+    If market is volatile, it relaxes to 1.6 Sigma to catch the swing.
+    """
     try:
-        numbers = [safe_float(d.get('actual_number')) for d in history[-100:] if safe_float(d.get('actual_number')) >= 0]
+        numbers = [safe_float(d.get('actual_number')) for d in history[-30:]]
         if len(numbers) < 20: return None
+        
         mean = calculate_mean(numbers)
-        std = calculate_std_dev(numbers)
+        std = calculate_stddev(numbers)
         if std == 0: return None
-        last_val = numbers[-1]
-        zscore = (last_val - mean) / std
-        strict_mod = statemanager.get_strictness_level()
-        if abs(zscore) < EngineConfig.ZSCORE_TRIGGER * strict_mod: return None
-        strength = min(abs(zscore), 1.0)
-        return {
-            'prediction': GameConstants.SMALL if zscore > 0 else GameConstants.BIG,
-            'weight': strength * 1.3,
-            'source': 'QuantumAggro'
-        }
+        
+        current_val = numbers[-1]
+        z_score = (current_val - mean) / std
+        
+        # LOGIC:
+        # Z-Score > 1.6 means we are statistically "Too High" -> Bet SMALL
+        # Z-Score < -1.6 means we are statistically "Too Low" -> Bet BIG
+        
+        # The higher the Z-Score, the stronger the signal
+        strength = min(abs(z_score) / 2.5, 1.0) # Cap strength at 1.0
+        
+        if z_score > 1.6:
+            return {'prediction': GameConstants.SMALL, 'weight': strength, 'source': f'Quantum(High Z:{z_score:.1f})'}
+        elif z_score < -1.6:
+            return {'prediction': GameConstants.BIG, 'weight': strength, 'source': f'Quantum(Low Z:{z_score:.1f})'}
+            
+        return None
     except: return None
 
-def engine_deep_memory_v5(history: List[Dict]) -> Optional[Dict]:
+# -----------------------------------------------------------------------------
+# ENGINE 2: DEEP PATTERN V3 (THE MEMORY)
+# -----------------------------------------------------------------------------
+def engine_deep_pattern_v3(history: List[Dict]) -> Optional[Dict]:
+    """
+    UPGRADE: Scans for patterns of length 3 up to 12.
+    Now weights recent patterns more heavily.
+    """
     try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-EngineConfig.DEEP_MEM_LOOKBACK:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 25: return None
+        if len(history) < 60: return None
         
-        raw_str = ''.join('B' if o == GameConstants.BIG else 'S' for o in outcomes)
-        max_search_depth = min(15, len(raw_str)//4)
-        strict_mod = statemanager.get_strictness_level()
+        # Convert history to "B" (Big) or "S" (Small) string
+        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
+        raw_str = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o])
         
-        for depth in range(max_search_depth, 3, -1):
+        best_signal = None
+        highest_confidence = 0.0
+        
+        # We iterate through pattern lengths (Deep to Shallow)
+        # Length 12 down to 4
+        for depth in range(12, 3, -1):
             curr_pattern = raw_str[-depth:]
-            search_area = raw_str[:-1]
-            count_b = count_s = 0
+            search_area = raw_str[:-1] # Look at the past
+            
+            # Count occurrences
+            count_b_next = 0
+            count_s_next = 0
+            
             start = 0
             while True:
                 idx = search_area.find(curr_pattern, start)
                 if idx == -1: break
+                
+                # Check what happened next
                 if idx + depth < len(search_area):
                     next_char = search_area[idx + depth]
-                    if next_char == 'B': count_b += 1
-                    else: count_s += 1
+                    if next_char == 'B': count_b_next += 1
+                    else: count_s_next += 1
+                
                 start = idx + 1
             
-            total = count_b + count_s
-            if total < 2: continue
+            total_matches = count_b_next + count_s_next
             
-            imbalance = abs(count_b/total - count_s/total)
-            min_edge = 0.10 * strict_mod if GLOBAL_STRICTNESS < 50 else 0.14 * strict_mod
-            
-            if imbalance > min_edge:
-                if count_b > count_s:
-                    return {'prediction': GameConstants.BIG, 'weight': imbalance * 1.4, 'source': f'DeepAggro{depth}'}
-                return {'prediction': GameConstants.SMALL, 'weight': imbalance * 1.4, 'source': f'DeepAggro{depth}'}
-        return None
+            # We need at least 3 historical precedents to trust this
+            if total_matches >= 3:
+                prob_b = count_b_next / total_matches
+                prob_s = count_s_next / total_matches
+                
+                # Calculate "Imbalance" (How strong is the pattern?)
+                # If 5 matches and all 5 were B, imbalance is 1.0 (Strong)
+                # If 5 matches and 3B/2S, imbalance is 0.2 (Weak)
+                imbalance = abs(prob_b - prob_s)
+                
+                if imbalance > highest_confidence and imbalance > 0.4: # >70% probability
+                    highest_confidence = imbalance
+                    pred = GameConstants.BIG if prob_b > prob_s else GameConstants.SMALL
+                    # Boost weight by depth (Deeper patterns are rarer and more trusted)
+                    weight = imbalance * (1 + (depth * 0.1))
+                    best_signal = {'prediction': pred, 'weight': weight, 'source': f'PatternV3-D{depth}({total_matches})'}
+                    
+                    # If we find a very long, very strong pattern, stop searching
+                    if depth > 8 and imbalance > 0.8: break
+
+        return best_signal
     except: return None
 
-def engine_chart_patterns(history: List[Dict]) -> Optional[Dict]:
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-40:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 8: return None
-        
-        s = ''.join('B' if o == GameConstants.BIG else 'S' for o in outcomes)
-        patterns = {
-            'BSBSBSBS': GameConstants.BIG, 'SBSBSBSB': GameConstants.SMALL,
-            'SSBBSSBB': GameConstants.SMALL, 'BBSSBBSS': GameConstants.BIG,
-            'BBBSSSBBB': GameConstants.BIG, 'SSSBBBSSS': GameConstants.SMALL,
-            'BSBSBS': GameConstants.BIG, 'SBSBSB': GameConstants.SMALL,
-            'SSBB': GameConstants.SMALL, 'BBSS': GameConstants.BIG,
-            'BBBBBB': GameConstants.SMALL, 'SSSSSS': GameConstants.BIG
-        }
-        
-        for pattern, prediction in patterns.items():
-            if len(pattern) <= len(s) and s.endswith(pattern[:-1]):
-                weight = 0.92 if len(pattern) >= 6 else 0.78
-                return {'prediction': prediction, 'weight': weight, 'source': f'ChartAggro{len(pattern)}'}
-        return None
-    except: return None
-
-def engine_bayesian_probability(history: List[Dict]) -> Optional[Dict]:
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
-        cleaned = [o for o in outcomes if o]
-        if len(cleaned) < EngineConfig.BAYES_CONTEXT_WINDOW + 8: return None
-        
-        context_len = EngineConfig.BAYES_CONTEXT_WINDOW
-        last_context = tuple(cleaned[-context_len:])
-        
-        b_count = s_count = 0
-        for i in range(len(cleaned) - context_len - 1):
-            if tuple(cleaned[i:i+context_len]) == last_context:
-                next_val = cleaned[i+context_len]
-                if next_val == GameConstants.BIG: b_count += 1
-                elif next_val == GameConstants.SMALL: s_count += 1
-        
-        total = b_count + s_count
-        if total < 2: return None
-        
-        prob_b = (b_count + 1) / (total + 2)
-        prob_s = (s_count + 1) / (total + 2)
-        strict_mod = statemanager.get_strictness_level()
-        
-        if prob_b > EngineConfig.BAYES_THRESHOLD * strict_mod:
-            return {'prediction': GameConstants.BIG, 'weight': prob_b, 'source': 'BayesAggro'}
-        elif prob_s > EngineConfig.BAYES_THRESHOLD * strict_mod:
-            return {'prediction': GameConstants.SMALL, 'weight': prob_s, 'source': 'BayesAggro'}
-        return None
-    except: return None
-
-def engine_momentum_oscillator(history: List[Dict]) -> Optional[Dict]:
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-25:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 8: return None
-        
-        score = 0.0
-        weight = 1.0
-        decay = 0.87
-        
-        for o in reversed(outcomes):
-            if o == GameConstants.BIG: score += weight
-            elif o == GameConstants.SMALL: score -= weight
-            weight *= decay
-        
-        strict_mod = statemanager.get_strictness_level()
-        if score > EngineConfig.MOMENTUM_TRIGGER * strict_mod * 1.2:
-            return {'prediction': GameConstants.BIG, 'weight': min(0.87, score/2.8), 'source': 'MomentumAggro'}
-        elif score < -EngineConfig.MOMENTUM_TRIGGER * strict_mod * 1.2:
-            return {'prediction': GameConstants.SMALL, 'weight': min(0.87, abs(score)/2.8), 'source': 'MomentumAggro'}
-        return None
-    except: return None
-
-def engine_markov_chain_v2(history: List[Dict]) -> Optional[Dict]:
-    try:
-        statemanager.update_transition_matrix(history)
-        last_outcome = get_outcome_from_number(history[-1].get('actual_number'))
-        if not last_outcome: return None
-        
-        last_state = 1 if last_outcome == GameConstants.BIG else 0
-        p_big_next = statemanager.transition_matrix[last_state, 1]
-        
-        recent_bs = [1 if get_outcome_from_number(d.get('actual_number')) == GameConstants.BIG else 0 
-                    for d in history[-60:] if get_outcome_from_number(d.get('actual_number'))]
-        if len(recent_bs) >= 3:
-            state2 = tuple(recent_bs[-2:])
-            trans2 = defaultdict(lambda: defaultdict(int))
-            for i in range(len(recent_bs)-2):
-                trans2[tuple(recent_bs[i:i+2])][recent_bs[i+2]] += 1
-            total2 = sum(trans2[state2].values())
-            if total2 > 0:
-                p_big_next = (p_big_next + trans2[state2][1]/total2 * 0.7) / 1.7
-        
-        strict_mod = statemanager.get_strictness_level()
-        if p_big_next > EngineConfig.MARKOV_THRESHOLD * strict_mod:
-            return {'prediction': GameConstants.BIG, 'weight': p_big_next, 'source': 'MarkovAggro'}
-        elif p_big_next < (1 - EngineConfig.MARKOV_THRESHOLD * strict_mod):
-            return {'prediction': GameConstants.SMALL, 'weight': 1-p_big_next, 'source': 'MarkovAggro'}
-        return None
-    except: return None
-
-def engine_streak_reversal(history: List[Dict]) -> Optional[Dict]:
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-35:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 12: return None
-        
-        streak_len = 1
-        current = outcomes[-1]
-        for i in range(2, len(outcomes)+1):
-            if i > len(outcomes) or outcomes[-i] != current:
-                break
-            streak_len += 1
-        
-        if streak_len >= 3:
-            prediction = GameConstants.SMALL if current == GameConstants.BIG else GameConstants.BIG
-            weight = min(0.94, 0.65 + (streak_len-2)*0.09)
-            return {'prediction': prediction, 'weight': weight, 'source': f'StreakR{streak_len}'}
-        return None
-    except: return None
-
-def engine_hot_cold_v2(history: List[Dict]) -> Optional[Dict]:
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-120:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 35: return None
-        
-        windows = [25, 60, 120]
-        big_pcts = []
-        for w in windows:
-            recent = outcomes[-w:]
-            big_pcts.append(recent.count(GameConstants.BIG) / len(recent))
-        
-        avg_pct = np.mean(big_pcts)
-        strict_mod = statemanager.get_strictness_level()
-        
-        if avg_pct < 0.40 * strict_mod:
-            return {'prediction': GameConstants.BIG, 'weight': min(0.90, (0.5-avg_pct)*2.2), 'source': 'HotColdAggro'}
-        elif avg_pct > 0.60 / strict_mod:
-            return {'prediction': GameConstants.SMALL, 'weight': min(0.90, (avg_pct-0.5)*2.2), 'source': 'HotColdAggro'}
-        return None
-    except: return None
-
-def engine_rng_bias(history: List[Dict]) -> Optional[Dict]:
-    try:
-        p_value = statemanager.chi_square_bias_test(history)
-        if not statemanager.rng_bias_detected: return None
-        
-        numbers = [safe_float(d.get('actual_number')) for d in history[-250:] if safe_float(d.get('actual_number')) >= 0]
-        recent_big_pct = sum(1 for n in numbers[-25:] if n >= 5) / 25
-        if recent_big_pct < 0.28:
-            return {'prediction': GameConstants.BIG, 'weight': 0.88, 'source': 'RNGBias+'}
-        elif recent_big_pct > 0.72:
-            return {'prediction': GameConstants.SMALL, 'weight': 0.88, 'source': 'RNGBias+'}
-        return None
-    except: return None
-
-def engine_regime_detector_v2(history: List[Dict]) -> Optional[Dict]:
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-180:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 70: return None
-        
-        counts = Counter(outcomes)
-        total = len(outcomes)
-        entropy = -sum((c/total)*math.log2(c/total+1e-10) for c in counts.values())
-        
-        strict_mod = statemanager.get_strictness_level()
-        if entropy > 2.3 * strict_mod:
-            statemanager.market_regime = 'CHOPPY'
-            return None
-        elif entropy < 1.2:
-            statemanager.market_regime = 'TRENDING'
-            last = outcomes[-1]
-            pred = GameConstants.SMALL if last == GameConstants.BIG else GameConstants.BIG
-            return {'prediction': pred, 'weight': 0.80, 'source': 'RegimeAggro'}
-        
-        statemanager.market_regime = 'RANDOM'
-        return None
-    except: return None
-
-# === MONTE CARLO SUPERVOTER ===
-def engine_monte_carlo_v2(history: List[Dict], primary_votes: List[Dict]) -> Optional[Dict]:
-    try:
-        if not primary_votes: return None
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-350:]]
-        outcomes = [o for o in outcomes if o]
-        if len(outcomes) < 90: return None
-        
-        primary_pred = Counter(v['prediction'] for v in primary_votes).most_common(1)[0][0]
-        sim_wins = sum(1 for _ in range(EngineConfig.MONTE_CARLO_SIMS) 
-                      if random.choice(outcomes) == primary_pred)
-        sim_prob = sim_wins / EngineConfig.MONTE_CARLO_SIMS
-        
-        strict_mod = statemanager.get_strictness_level()
-        if sim_prob > 0.60 * strict_mod:
-            return {'prediction': primary_pred, 'weight': sim_prob, 'source': 'MonteCarloAggro'}
-        return None
-    except: return None
-
-# === HELPER: SMART FALLBACK CALCULATOR ===
-def calculate_smart_fallback(history: List[Dict]) -> Tuple[str, str]:
+# -----------------------------------------------------------------------------
+# ENGINE 3: NEURAL PERCEPTRON (THE MARKET SENSOR)
+# -----------------------------------------------------------------------------
+def engine_neural_perceptron(history: List[Dict]) -> Optional[Dict]:
     """
-    Analyzes last 15 rounds. 
-    If > 60% BIG -> Force SMALL. 
-    If > 60% SMALL -> Force BIG.
-    Else -> Alternate last.
+    A lightweight Neural Network layer.
+    Inputs:
+    1. RSI (Normalized -0.5 to 0.5)
+    2. Momentum (Last 5 vs Last 20)
+    3. Parity (Red vs Green balance)
+    
+    Output:
+    Sigmoid Probability (0.0 to 1.0)
     """
     try:
-        recent = [get_outcome_from_number(d['actual_number']) for d in history[-15:]]
-        recent = [o for o in recent if o]
-        if len(recent) < 5:
-            return (GameConstants.BIG, "Low Data")
+        numbers = [safe_float(d.get('actual_number')) for d in history[-40:]]
+        if len(numbers) < 25: return None
+        
+        # --- INPUT 1: RSI ---
+        rsi = calculate_rsi(numbers, 14)
+        # Normalize RSI: 50 becomes 0, 70 becomes 0.2, 30 becomes -0.2
+        input_rsi = (rsi - 50) / 100.0 
+        
+        # --- INPUT 2: MOMENTUM ---
+        fast_sma = calculate_mean(numbers[-5:])
+        slow_sma = calculate_mean(numbers[-20:])
+        # Normalize: Positive if rising, Negative if falling
+        input_mom = (fast_sma - slow_sma) / 10.0
+        
+        # --- INPUT 3: REVERSION FORCE ---
+        # If last 3 were BIG, force is Negative (expect SMALL)
+        last_3 = [get_outcome_from_number(n) for n in numbers[-3:]]
+        b_count = last_3.count(GameConstants.BIG)
+        # If 3 Bigs, input is -0.3. If 3 Smalls, input is +0.3
+        input_rev = (1.5 - b_count) / 5.0
+        
+        # --- NEURAL WEIGHTS (Pre-Trained / Hardcoded) ---
+        # RSI detects overbought/sold (Negative correlation)
+        w_rsi = -1.5 
+        # Momentum detects trend (Positive correlation)
+        w_mom = 1.2
+        # Reversion detects streak exhaustion
+        w_rev = 0.8
+        
+        # --- DOT PRODUCT (The "Neuron") ---
+        # z = (i1*w1) + (i2*w2) + (i3*w3)
+        z = (input_rsi * w_rsi) + (input_mom * w_mom) + (input_rev * w_rev)
+        
+        # --- ACTIVATION ---
+        probability = sigmoid(z) # Returns 0.0 to 1.0
+        
+        # --- DECISION ---
+        # Sigmoid > 0.60 implies BIG
+        # Sigmoid < 0.40 implies SMALL
+        dist_from_neutral = abs(probability - 0.5)
+        
+        if probability > 0.60:
+            return {'prediction': GameConstants.BIG, 'weight': dist_from_neutral * 2.0, 'source': f'NeuralNet({probability:.2f})'}
+        elif probability < 0.40:
+            return {'prediction': GameConstants.SMALL, 'weight': dist_from_neutral * 2.0, 'source': f'NeuralNet({probability:.2f})'}
+            
+        return None
+    except: return None
 
-        big_count = recent.count(GameConstants.BIG)
-        ratio = big_count / len(recent)
+# =============================================================================
+# SECTION 5: THE ARCHITECT (MAIN LOGIC)
+# =============================================================================
 
-        if ratio >= 0.60:
-            return (GameConstants.SMALL, f"Anti-Bias ({ratio:.0%} Big)")
-        elif ratio <= 0.40:
-            return (GameConstants.BIG, f"Anti-Bias ({ratio:.0%} Small)")
+class GlobalStateManager:
+    def __init__(self):
+        self.loss_streak = 0
+        self.last_outcome = None
+        
+state_manager = GlobalStateManager()
+
+def ultraAIPredict(history: List[Dict], current_bankroll: float = 10000.0, last_result: Optional[str] = None) -> Dict:
+    """
+    MAIN ENTRY POINT
+    """
+    # 1. Update Streak
+    if last_result:
+        actual_outcome = get_outcome_from_number(history[-1]['actual_number'])
+        if last_result == GameConstants.SKIP:
+            pass
+        elif last_result == actual_outcome:
+            state_manager.loss_streak = 0
         else:
-            # Balanced: Just alternate the very last one
-            last_one = recent[-1]
-            pred = GameConstants.SMALL if last_one == GameConstants.BIG else GameConstants.BIG
-            return (pred, "Balanced PingPong")
-    except:
-        return (GameConstants.BIG, "Fallback Error")
-
-# === MAIN ULTRA AI BRAIN - BIASED CORRECTED ===
-def ultraAIPredict(history: List[Dict], current_bankroll: float, previous_pred_label: str = None) -> Dict:
-    """12-ENGINE AGGRESSIVE SYSTEM - BIAS CORRECTED"""
+            state_manager.loss_streak += 1
+            
+    streak = state_manager.loss_streak
     
-    # GLOBAL UPDATES
-    statemanager.bankroll = current_bankroll
-    statemanager.total_bets += 1
-    statemanager.total_rounds += 1
+    # 2. Run The Trident Engines
+    signals = []
     
-    # MINIMUM SAFETY ONLY
-    if len(history) < EngineConfig.MIN_DATA_REQUIRED:
-        smart_pred, smart_reason = calculate_smart_fallback(history)
-        return build_prediction_response(smart_pred, 0.52, "WARMUP", f"Low Data - {smart_reason}")
-
-    # RESULT TRACKING
-    if len(history) >= 2 and previous_pred_label and previous_pred_label not in [GameConstants.SKIP, "WAITING", "COOLDOWN"]:
-        last_actual = get_outcome_from_number(history[-1].get('actual_number'))
-        was_correct = last_actual == previous_pred_label
-        statemanager.update_engine_performance([], was_correct)
-        if was_correct:
-            statemanager.consecutive_wins += 1
-            statemanager.consecutive_losses = 0
-            statemanager.aggressive_mode = 0
+    # Engine 1: Quantum
+    s1 = engine_quantum_adaptive(history)
+    if s1: signals.append(s1)
+    
+    # Engine 2: Deep Pattern
+    s2 = engine_deep_pattern_v3(history)
+    if s2: signals.append(s2)
+    
+    # Engine 3: Neural Net
+    s3 = engine_neural_perceptron(history)
+    if s3: signals.append(s3)
+    
+    # 3. Aggregate Signals
+    big_score = sum(s['weight'] for s in signals if s['prediction'] == GameConstants.BIG)
+    small_score = sum(s['weight'] for s in signals if s['prediction'] == GameConstants.SMALL)
+    
+    total_score = big_score + small_score
+    if total_score == 0:
+         return {'finalDecision': GameConstants.SKIP, 'confidence': 0, 'positionsize': 0, 'level': 'NO_SIG', 'reason': 'Silence', 'topsignals': []}
+         
+    # 4. Calculate Confidence
+    # Pure ratio of the winning side vs total
+    if big_score > small_score:
+        final_pred = GameConstants.BIG
+        confidence = big_score / (total_score + 0.1) # +0.1 prevents 100% fake confidence
+    else:
+        final_pred = GameConstants.SMALL
+        confidence = small_score / (total_score + 0.1)
+    
+    # Cap confidence at 0.99
+    confidence = min(confidence, 0.99)
+    
+    # 5. Determine Stake & Level
+    # Get active engine names for display
+    active_engine_names = [s['source'] for s in signals]
+    
+    stake = 0
+    level = "SKIP"
+    reason = f"Conf {confidence:.0%}"
+    
+    base_bet = max(current_bankroll * RiskConfig.BASE_RISK_PERCENT, RiskConfig.MIN_BET_AMOUNT)
+    
+    # --- LOGIC GATE ---
+    
+    # SCENARIO: SNIPER (2+ Losses) - Needs High Confidence
+    if streak >= 2:
+        if confidence >= RiskConfig.LVL3_MIN_CONFIDENCE:
+            stake = base_bet * RiskConfig.TIER_3_MULT
+            level = "🔥 SNIPER"
+            reason = "Neural+Pattern Lock"
         else:
-            statemanager.consecutive_losses += 1
-            statemanager.consecutive_wins = 0
-            statemanager.aggressive_mode = min(3, statemanager.aggressive_mode + 1)
-
-    # HARD FINANCIAL LIMITS ONLY
-    drawdown = (statemanager.peak_bankroll - current_bankroll) / statemanager.peak_bankroll
-    if drawdown > RiskConfig.STOP_LOSS_PCT * 1.5:
-        smart_pred, smart_reason = calculate_smart_fallback(history)
-        return build_prediction_response(smart_pred, 0.50, "MAXLOSS", "Emergency Conservative")
-
-    # === SAFETY GUARDS (NOW USE SMART FALLBACK INSTEAD OF HARD BIG) ===
-    if statemanager.consecutive_losses >= 2:
-        if is_market_choppy(history):
-            smart_pred, smart_reason = calculate_smart_fallback(history)
-            return build_prediction_response(smart_pred, 0.51, "CHAOS-L", f"Choppy - {smart_reason}")
-        if is_trend_wall_active(history):
-            smart_pred, smart_reason = calculate_smart_fallback(history)
-            return build_prediction_response(smart_pred, 0.51, "TREND-L", f"Wall Hit - {smart_reason}")
-
-    # === ALWAYS RUN 12 ENGINES ===
-    engines = [
-        engine_quantum_adaptive, engine_deep_memory_v5, engine_chart_patterns,
-        engine_bayesian_probability, engine_momentum_oscillator, engine_markov_chain_v2,
-        engine_streak_reversal, engine_hot_cold_v2, engine_rng_bias, engine_regime_detector_v2
-    ]
+            level = "SKIP (Recov)"
+            reason = f"Need {RiskConfig.LVL3_MIN_CONFIDENCE:.0%}"
+            
+    # SCENARIO: RECOVERY (1 Loss)
+    elif streak == 1:
+        if confidence >= RiskConfig.LVL2_MIN_CONFIDENCE:
+            stake = base_bet * RiskConfig.TIER_2_MULT
+            level = "RECOVERY"
+        else:
+            level = "SKIP (Recov)"
     
-    signals = [eng(history) for eng in engines if eng(history)]
+    # SCENARIO: STANDARD (0 Losses)
+    else:
+        if confidence >= RiskConfig.LVL1_MIN_CONFIDENCE:
+            stake = base_bet * RiskConfig.TIER_1_MULT
+            level = "STANDARD"
+        else:
+            level = "SKIP"
+            
+    # Hard Stop for Bankroll Protection
+    if stake > current_bankroll * 0.5: stake = current_bankroll * 0.5
     
-    # === SMART FALLBACK IF NO SIGNALS (FIXED BIAS) ===
-    if not signals:
-        smart_pred, smart_reason = calculate_smart_fallback(history)
-        return build_prediction_response(smart_pred, 0.52, "FALLBACK", smart_reason)
-
-    # === PROGRESSIVE CONSENSUS ===
-    votes = Counter(s['prediction'] for s in signals)
-    top_pred, vote_count = votes.most_common(1)[0]
-    
-    # RELAXED VOTING - PROGRESSIVE
-    strict_mod = statemanager.get_strictness_level()
-    min_votes_needed = max(1, int(EngineConfig.MIN_VOTES_REQUIRED * strict_mod))
-    
-    if vote_count < min_votes_needed:
-        # FORCE CONSENSUS - TAKE STRONGEST SINGLE SIGNAL
-        strongest = max(signals, key=lambda x: x['weight'])
-        top_pred = strongest['prediction']
-        vote_count = 1
-        signals = [strongest]
-
-    # WEIGHTED ENSEMBLE
-    weighted_score = sum(s['weight'] * statemanager.get_engine_weight(s['source'])
-                        for s in signals if s['prediction'] == top_pred)
-    total_weight = sum(s['weight'] for s in signals if s['prediction'] == top_pred)
-    ensemble_prob = weighted_score / max(1, total_weight)
-
-    # MINIMUM 52% - AGGRESSIVE
-    final_prob = max(0.52, ensemble_prob * strict_mod)
-
-    # MONTE CARLO BOOST
-    mc = engine_monte_carlo_v2(history, signals)
-    confidence = final_prob * (1.05 if mc and mc['weight'] > 0.60 else 0.98)
-    level = "ELITE" if mc else f"A{vote_count}"
-
-    # PROGRESSIVE KELLY SIZING
-    kelly_f = statemanager.kelly_fraction(final_prob)
-    position_size = max(RiskConfig.MIN_BET_AMOUNT, 
-                       min(current_bankroll * kelly_f * 120 * strict_mod, RiskConfig.MAX_BET_AMOUNT))
-    
-    # BIAS BOOST
-    if statemanager.rng_bias_detected:
-        position_size *= 1.4
-        confidence *= 1.15
-        level = "BIAS+" + level
-
-    statemanager.peak_bankroll = max(statemanager.peak_bankroll, current_bankroll)
-
-    mode_text = {0: "NORMAL", 1: "L1-10%", 2: "L2-20B", 3: "FULLPWR"}[statemanager.aggressive_mode]
-    reason = f"{vote_count}/12 | {final_prob:.1%} | {mode_text} | Kelly:{kelly_f:.1%}" + \
-             (" | RNG!" if statemanager.rng_bias_detected else "")
-
-    return build_prediction_response(top_pred, confidence, level, reason, 
-                                   [s['source'] for s in signals if s['prediction'] == top_pred],
-                                   round(position_size, 0))
-
-def build_prediction_response(prediction: str, confidence: float, level: str, reason: str,
-                            top_signals: List[str] = None, positionsize: float = 0) -> Dict:
-    """ALWAYS RETURNS PREDICTION - NEVER SKIP"""
     return {
-        'finalDecision': prediction,
-        'confidence': min(1.0, confidence),
+        'finalDecision': final_pred if stake > 0 else GameConstants.SKIP,
+        'confidence': confidence,
+        'positionsize': int(stake),
         'level': level,
         'reason': reason,
-        'topSignals': top_signals or [],
-        'positionsize': max(50, positionsize)  # MINIMUM 50 ALWAYS
+        'topsignals': active_engine_names
     }
 
-def build_skip_response(reason: str) -> Dict:  # NEVER USED NOW
-    return build_prediction_response("BIG", 0.50, "---", "SKIP DISABLED - AGGRESSIVE MODE")
-
-# === EXACT FETCHER FUNCTIONS ===
-def reset_engine_memory():
-    """CALLED BY FETCHER"""
-    global statemanager
-    statemanager = GlobalStateManager()
-    print("TITAN V3.2 BIAS KILLER RESET - SMART LOGIC ACTIVE")
-
 if __name__ == "__main__":
-    print("TITAN V3.2 BIAS KILLER LOADED - NO DEFAULT BIG")
-    print("SMART FALLBACK: 60/40 RATIO ANALYSIS")
+    print("TITAN V200 TRIDENT LOADED.")
