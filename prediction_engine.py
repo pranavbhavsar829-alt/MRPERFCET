@@ -1,13 +1,4 @@
-# ==============================================================================
-# FILE: prediction_engine.py
-# PROJECT: TITAN V14.0 - SNIPER EDITION (FULL COMPATIBILITY FIX)
-# ==============================================================================
-# This module provides the core logic for the Titan prediction system.
-# It includes:
-# 1. get_outcome_from_number (REQUIRED by fetcher.py)
-# 2. reset_engine_memory (REQUIRED by fetcher.py)
-# 3. ultraAIPredict (REQUIRED by fetcher.py)
-# ==============================================================================
+
 
 import math
 from collections import Counter, defaultdict
@@ -23,13 +14,13 @@ class SniperConfig:
     """
     # 1. BAYESIAN ENGINE
     # Only bet if the math says there is a > 72% probability.
-    BAYES_THRESHOLD = 0.60 
+    BAYES_THRESHOLD = 0.55 
     
     # 2. DEEP MEMORY ENGINE
     # We need at least 3 exact historical matches to trust the pattern.
     MIN_MEMORY_MATCHES = 2 
     # The pattern must have a 20% edge (e.g. 60/40 split is NOT enough).
-    MEMORY_EDGE_REQ = 0.15
+    MEMORY_EDGE_REQ = 0.12
 
     # 3. CONSENSUS RULES
     # How many engines must agree? 
