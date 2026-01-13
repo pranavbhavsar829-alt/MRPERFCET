@@ -1,399 +1,373 @@
-#!/usr/bin/env python3
-"""
-=============================================================================
-  _______ _____ _______ _    _  _   _ 
- |__   __|_   _|__   __| |  | || \ | |
-    | |    | |    | |  | |  | ||  \| |
-    | |    | |    | |  | |  | || . ` |
-    | |   _| |_   | |  | |__| || |\  |
-    |_|  |_____|  |_|   \____/ |_| \_|
-                                      
-  TITAN V200 - THE TRIDENT CORE (NEURAL EDITION)
-  (Streamlined: Quantum + Pattern + Neural)
-=============================================================================
-"""
+# ==============================================================================
+# FILE: prediction_engine.py
+# PROJECT: TITAN V14.0 - SNIPER EDITION (FULL COMPATIBILITY FIX)
+# ==============================================================================
+# This module provides the core logic for the Titan prediction system.
+# It includes:
+# 1. get_outcome_from_number (REQUIRED by fetcher.py)
+# 2. reset_engine_memory (REQUIRED by fetcher.py)
+# 3. ultraAIPredict (REQUIRED by fetcher.py)
+# ==============================================================================
 
 import math
-import statistics
-import random
-import traceback
 from collections import Counter, defaultdict
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 
-# =============================================================================
-# SECTION 1: IMMUTABLE GAME CONSTANTS
-# =============================================================================
+# ==============================================================================
+# SECTION 1: CONFIGURATION (SNIPER SETTINGS)
+# ==============================================================================
+
+class SniperConfig:
+    """
+    Hyper-Strict Settings for Maximum Accuracy.
+    """
+    # 1. BAYESIAN ENGINE
+    # Only bet if the math says there is a > 72% probability.
+    BAYES_THRESHOLD = 0.60 
+    
+    # 2. DEEP MEMORY ENGINE
+    # We need at least 3 exact historical matches to trust the pattern.
+    MIN_MEMORY_MATCHES = 2 
+    # The pattern must have a 20% edge (e.g. 60/40 split is NOT enough).
+    MEMORY_EDGE_REQ = 0.15
+
+    # 3. CONSENSUS RULES
+    # How many engines must agree? 
+    # STRICT RULE: 2 engines must agree.
+    MIN_VOTES = 2 
+
+    # 4. SAFETY GUARDS
+    MAX_IDENTICAL_STREAK = 9  # Stop betting if a color hits 9 times in a row.
+    CHOPPY_THRESHOLD = 10     # Stop if market flips (B-S-B-S) 10 times in 12 rounds.
+    SKIP_ON_0_5 = False        # Aggressive Violet Avoidance (0 and 5 are dangerous).
 
 class GameConstants:
+    """Core constants used across the system."""
     BIG = "BIG"
     SMALL = "SMALL" 
     SKIP = "SKIP"
-    
-    # We need decent history for the Neural Engine to warm up
-    MIN_HISTORY_FOR_PREDICTION = 40
-    DEBUG_MODE = True
 
-# =============================================================================
-# SECTION 2: RISK & SNIPER CONFIGURATION
-# =============================================================================
-
-class RiskConfig:
-    # -------------------------------------------------------------------------
-    # BANKROLL MANAGEMENT
-    # -------------------------------------------------------------------------
-    BASE_RISK_PERCENT = 0.03    # Increased to 3% (Since we have higher quality signals)
-    MIN_BET_AMOUNT = 50
-    MAX_BET_AMOUNT = 50000
-    
-    # -------------------------------------------------------------------------
-    # CONFIDENCE THRESHOLDS (The Trident Logic)
-    # -------------------------------------------------------------------------
-    # Since we only have 3 engines, we need high agreement or ONE very strong signal.
-    
-    # LEVEL 1: Standard
-    LVL1_MIN_CONFIDENCE = 0.60  # 60% (Usually means 2 out of 3 agree)
-    
-    # LEVEL 2: Recovery (After 1 Loss)
-    # We lowered this from 0.80 to 0.70 per your request to be more aggressive
-    LVL2_MIN_CONFIDENCE = 0.70  
-    
-    # LEVEL 3: SNIPER (After 2+ Losses)
-    # Requires near unanimity
-    LVL3_MIN_CONFIDENCE = 0.85 
-
-    # -------------------------------------------------------------------------
-    # MARTINGALE STEPS
-    # -------------------------------------------------------------------------
-    TIER_1_MULT = 1.0
-    TIER_2_MULT = 1.5   # Soft Recovery
-    TIER_3_MULT = 3.5   # Aggressive Recovery (Kill shot)
-    STOP_LOSS_STREAK = 5 # Extended to 5 to give the Neural Engine room to work
-
-# =============================================================================
-# SECTION 3: MATHEMATICAL UTILITIES
-# =============================================================================
+# ==============================================================================
+# SECTION 2: UTILITIES & STATE MANAGEMENT
+# ==============================================================================
 
 def safe_float(value: Any) -> float:
+    """Safely converts input to float."""
     try:
         if value is None: return 4.5
         return float(value)
     except: return 4.5
 
 def get_outcome_from_number(n: Any) -> Optional[str]:
+    """
+    Converts number 0-9 to BIG/SMALL.
+    CRITICAL: This function name MUST match fetcher.py imports exactly.
+    """
     val = int(safe_float(n))
     if 0 <= val <= 4: return GameConstants.SMALL
     if 5 <= val <= 9: return GameConstants.BIG
     return None
 
-def sigmoid(x):
-    """The Activation Function for our Neural Engine."""
-    # Converts any number into a probability between 0 and 1
-    try:
-        return 1 / (1 + math.exp(-x))
-    except OverflowError:
-        return 0.0 if x < 0 else 1.0
+class GlobalStateManager:
+    """Tracks the bot's short-term memory."""
+    def __init__(self):
+        self.loss_streak = 0
+        self.last_round_predictions = {}
 
-def calculate_mean(data: List[float]) -> float:
-    return sum(data) / len(data) if data else 0.0
+state_manager = GlobalStateManager()
 
-def calculate_stddev(data: List[float]) -> float:
-    if len(data) < 2: return 0.0
-    mean = calculate_mean(data)
-    variance = sum((x - mean) ** 2 for x in data) / (len(data) - 1)
-    return math.sqrt(variance)
-
-def calculate_rsi(data: List[float], period: int = 14) -> float:
-    if len(data) < period + 1: return 50.0
-    deltas = [data[i] - data[i-1] for i in range(1, len(data))]
-    gains = [d if d > 0 else 0 for d in deltas]
-    losses = [-d if d < 0 else 0 for d in deltas]
-    avg_gain = calculate_mean(gains[-period:])
-    avg_loss = calculate_mean(losses[-period:])
-    if avg_loss == 0: return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
-
-# =============================================================================
-# SECTION 4: THE TRIDENT ENGINES (MAX POWER)
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# ENGINE 1: QUANTUM AI (ADAPTIVE BOLLINGER)
-# -----------------------------------------------------------------------------
-def engine_quantum_adaptive(history: List[Dict]) -> Optional[Dict]:
+def reset_engine_memory():
     """
-    detects 'Reversion to Mean'.
-    UPGRADE: Uses Dynamic Sigma. 
-    If market is quiet, it requires 2.0 Sigma.
-    If market is volatile, it relaxes to 1.6 Sigma to catch the swing.
+    Externally called by fetcher.py to wipe memory on session reset.
+    CRITICAL: This function MUST exist for fetcher.py to work.
+    """
+    state_manager.loss_streak = 0
+    state_manager.last_round_predictions = {}
+    print("[ENGINE] Memory Wiped via External Reset.")
+
+# ==============================================================================
+# SECTION 3: SAFETY GUARDS (THE SHIELD)
+# ==============================================================================
+
+def is_market_choppy(history: List[Dict]) -> bool:
+    """
+    Detects 'Ping-Pong' markets (e.g., B-S-B-S-B).
+    Returns True if the market is switching too rapidly.
     """
     try:
-        numbers = [safe_float(d.get('actual_number')) for d in history[-30:]]
-        if len(numbers) < 20: return None
+        if len(history) < 15: return False
         
-        mean = calculate_mean(numbers)
-        std = calculate_stddev(numbers)
-        if std == 0: return None
+        # Get last 12 outcomes
+        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-12:]]
+        outcomes = [o for o in outcomes if o] # Filter Nones
         
-        current_val = numbers[-1]
-        z_score = (current_val - mean) / std
+        if len(outcomes) < 10: return False
         
-        # LOGIC:
-        # Z-Score > 1.6 means we are statistically "Too High" -> Bet SMALL
-        # Z-Score < -1.6 means we are statistically "Too Low" -> Bet BIG
-        
-        # The higher the Z-Score, the stronger the signal
-        strength = min(abs(z_score) / 2.5, 1.0) # Cap strength at 1.0
-        
-        if z_score > 1.6:
-            return {'prediction': GameConstants.SMALL, 'weight': strength, 'source': f'Quantum(High Z:{z_score:.1f})'}
-        elif z_score < -1.6:
-            return {'prediction': GameConstants.BIG, 'weight': strength, 'source': f'Quantum(Low Z:{z_score:.1f})'}
-            
-        return None
-    except: return None
+        # Count how many times the color switched vs stayed same
+        switches = 0
+        for i in range(1, len(outcomes)):
+            if outcomes[i] != outcomes[i-1]:
+                switches += 1
+                
+        return switches >= SniperConfig.CHOPPY_THRESHOLD
+    except: return False
 
-# -----------------------------------------------------------------------------
-# ENGINE 2: DEEP PATTERN V3 (THE MEMORY)
-# -----------------------------------------------------------------------------
-def engine_deep_pattern_v3(history: List[Dict]) -> Optional[Dict]:
+def is_trend_wall_active(history: List[Dict]) -> bool:
     """
-    UPGRADE: Scans for patterns of length 3 up to 12.
-    Now weights recent patterns more heavily.
+    Detects massive streaks (Dragon).
+    If we see 9+ results of the same color, we STOP predicting.
     """
     try:
-        if len(history) < 60: return None
+        limit = SniperConfig.MAX_IDENTICAL_STREAK
+        if len(history) < limit: return False
         
-        # Convert history to "B" (Big) or "S" (Small) string
+        # Get last 'limit' outcomes
+        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-limit:]]
+        first = outcomes[0]
+        
+        if not first: return False
+        
+        # Check if ALL items in the list are identical
+        if all(o == first for o in outcomes):
+            return True 
+        return False
+    except: return False
+
+# ==============================================================================
+# SECTION 4: THE 3 STRONG ENGINES (NO WEAK LOGIC)
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# ENGINE A: DEEP MEMORY (The Historian)
+# ------------------------------------------------------------------------------
+def engine_deep_memory(history: List[Dict]) -> Optional[Dict]:
+    """
+    Looks for the current pattern in the last 500 rounds.
+    STRICTNESS UPGRADE: Ignores weak matches.
+    """
+    try:
+        if len(history) < 50: return None
         outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
         raw_str = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o])
         
+        # Only look for patterns of length 4 to 7 (The Sweet Spot)
+        # Short patterns (2-3) are noise. Long patterns (8+) are too rare.
         best_signal = None
-        highest_confidence = 0.0
-        
-        # We iterate through pattern lengths (Deep to Shallow)
-        # Length 12 down to 4
-        for depth in range(12, 3, -1):
+        highest_weight = 0
+
+        for depth in range(7, 3, -1):
             curr_pattern = raw_str[-depth:]
-            search_area = raw_str[:-1] # Look at the past
+            search_area = raw_str[:-1]
             
-            # Count occurrences
-            count_b_next = 0
-            count_s_next = 0
+            count_b = 0; count_s = 0; start = 0
             
-            start = 0
             while True:
                 idx = search_area.find(curr_pattern, start)
                 if idx == -1: break
-                
-                # Check what happened next
                 if idx + depth < len(search_area):
                     next_char = search_area[idx + depth]
-                    if next_char == 'B': count_b_next += 1
-                    else: count_s_next += 1
-                
+                    if next_char == 'B': count_b += 1
+                    else: count_s += 1
                 start = idx + 1
             
-            total_matches = count_b_next + count_s_next
+            total = count_b + count_s
             
-            # We need at least 3 historical precedents to trust this
-            if total_matches >= 3:
-                prob_b = count_b_next / total_matches
-                prob_s = count_s_next / total_matches
+            # TIGHT FILTER: Minimum historical occurrences
+            if total >= SniperConfig.MIN_MEMORY_MATCHES:
+                prob_b = count_b / total
+                prob_s = count_s / total
                 
-                # Calculate "Imbalance" (How strong is the pattern?)
-                # If 5 matches and all 5 were B, imbalance is 1.0 (Strong)
-                # If 5 matches and 3B/2S, imbalance is 0.2 (Weak)
-                imbalance = abs(prob_b - prob_s)
-                
-                if imbalance > highest_confidence and imbalance > 0.4: # >70% probability
-                    highest_confidence = imbalance
-                    pred = GameConstants.BIG if prob_b > prob_s else GameConstants.SMALL
-                    # Boost weight by depth (Deeper patterns are rarer and more trusted)
-                    weight = imbalance * (1 + (depth * 0.1))
-                    best_signal = {'prediction': pred, 'weight': weight, 'source': f'PatternV3-D{depth}({total_matches})'}
-                    
-                    # If we find a very long, very strong pattern, stop searching
-                    if depth > 8 and imbalance > 0.8: break
+                # Check absolute edge
+                edge = abs(prob_b - prob_s)
+                if edge > SniperConfig.MEMORY_EDGE_REQ:
+                    weight = edge * (depth / 10) # Longer patterns = higher weight
+                    if weight > highest_weight:
+                        highest_weight = weight
+                        pred = GameConstants.BIG if count_b > count_s else GameConstants.SMALL
+                        best_signal = {'prediction': pred, 'source': f'DeepMem({depth})', 'weight': weight}
 
         return best_signal
     except: return None
 
-# -----------------------------------------------------------------------------
-# ENGINE 3: NEURAL PERCEPTRON (THE MARKET SENSOR)
-# -----------------------------------------------------------------------------
-def engine_neural_perceptron(history: List[Dict]) -> Optional[Dict]:
+
+# ------------------------------------------------------------------------------
+# ENGINE B: BAYESIAN PROBABILITY (The Mathematician)
+# ------------------------------------------------------------------------------
+def engine_bayesian(history: List[Dict]) -> Optional[Dict]:
     """
-    A lightweight Neural Network layer.
-    Inputs:
-    1. RSI (Normalized -0.5 to 0.5)
-    2. Momentum (Last 5 vs Last 20)
-    3. Parity (Red vs Green balance)
-    
-    Output:
-    Sigmoid Probability (0.0 to 1.0)
+    Calculates probability based on exact context.
+    STRICTNESS UPGRADE: High threshold only (72%+).
     """
     try:
-        numbers = [safe_float(d.get('actual_number')) for d in history[-40:]]
-        if len(numbers) < 25: return None
+        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
+        cleaned = [o[0] for o in outcomes if o] 
         
-        # --- INPUT 1: RSI ---
-        rsi = calculate_rsi(numbers, 14)
-        # Normalize RSI: 50 becomes 0, 70 becomes 0.2, 30 becomes -0.2
-        input_rsi = (rsi - 50) / 100.0 
+        # Look at last 3 outcomes (Trigrams)
+        context_len = 3
+        if len(cleaned) < 10: return None
         
-        # --- INPUT 2: MOMENTUM ---
-        fast_sma = calculate_mean(numbers[-5:])
-        slow_sma = calculate_mean(numbers[-20:])
-        # Normalize: Positive if rising, Negative if falling
-        input_mom = (fast_sma - slow_sma) / 10.0
+        last_context = tuple(cleaned[-context_len:])
+        b_count = 0; s_count = 0
         
-        # --- INPUT 3: REVERSION FORCE ---
-        # If last 3 were BIG, force is Negative (expect SMALL)
-        last_3 = [get_outcome_from_number(n) for n in numbers[-3:]]
-        b_count = last_3.count(GameConstants.BIG)
-        # If 3 Bigs, input is -0.3. If 3 Smalls, input is +0.3
-        input_rev = (1.5 - b_count) / 5.0
+        for i in range(len(cleaned) - context_len - 1):
+            if tuple(cleaned[i : i+context_len]) == last_context:
+                next_val = cleaned[i+context_len]
+                if next_val == 'B': b_count += 1
+                elif next_val == 'S': s_count += 1
         
-        # --- NEURAL WEIGHTS (Pre-Trained / Hardcoded) ---
-        # RSI detects overbought/sold (Negative correlation)
-        w_rsi = -1.5 
-        # Momentum detects trend (Positive correlation)
-        w_mom = 1.2
-        # Reversion detects streak exhaustion
-        w_rev = 0.8
+        total = b_count + s_count
+        if total == 0: return None
         
-        # --- DOT PRODUCT (The "Neuron") ---
-        # z = (i1*w1) + (i2*w2) + (i3*w3)
-        z = (input_rsi * w_rsi) + (input_mom * w_mom) + (input_rev * w_rev)
+        prob_b = b_count / total
+        prob_s = s_count / total
         
-        # --- ACTIVATION ---
-        probability = sigmoid(z) # Returns 0.0 to 1.0
-        
-        # --- DECISION ---
-        # Sigmoid > 0.60 implies BIG
-        # Sigmoid < 0.40 implies SMALL
-        dist_from_neutral = abs(probability - 0.5)
-        
-        if probability > 0.60:
-            return {'prediction': GameConstants.BIG, 'weight': dist_from_neutral * 2.0, 'source': f'NeuralNet({probability:.2f})'}
-        elif probability < 0.40:
-            return {'prediction': GameConstants.SMALL, 'weight': dist_from_neutral * 2.0, 'source': f'NeuralNet({probability:.2f})'}
+        # TIGHT FILTER: Only return if > 72% certainty
+        if prob_b >= SniperConfig.BAYES_THRESHOLD:
+            return {'prediction': GameConstants.BIG, 'source': 'BayesHigh', 'weight': prob_b}
+        elif prob_s >= SniperConfig.BAYES_THRESHOLD:
+            return {'prediction': GameConstants.SMALL, 'source': 'BayesHigh', 'weight': prob_s}
             
         return None
     except: return None
 
-# =============================================================================
-# SECTION 5: THE ARCHITECT (MAIN LOGIC)
-# =============================================================================
 
-class GlobalStateManager:
-    def __init__(self):
-        self.loss_streak = 0
-        self.last_outcome = None
+# ------------------------------------------------------------------------------
+# ENGINE C: TITAN TREND (The Shape Scanner)
+# ------------------------------------------------------------------------------
+def engine_trend_patterns(history: List[Dict]) -> Optional[Dict]:
+    """
+    Simplified Chart Patterns.
+    REMOVED: Complex/Rare shapes.
+    KEPT: Dragons, Stairs, and Alternating 1v1.
+    """
+    try:
+        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-20:]]
+        s = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o])
+        if not s: return None
+
+        # Only the 'Golden' Patterns
+        patterns = {
+            # 1. DRAGON (Trend Following) - If we see 5, bet 6.
+            'Dragon_B': ['BBBBB'], 
+            'Dragon_S': ['SSSSS'],
+            
+            # 2. PING PONG (1v1) - If strict alternation
+            'PingPong_B': ['SBSBS'], # Expect B
+            'PingPong_S': ['BSBSB'], # Expect S
+            
+            # 3. DOUBLE STAIRS
+            '2v2_B': ['SSBBSS'], # Expect B
+            '2v2_S': ['BBSSBB'], # Expect S
+        }
         
-state_manager = GlobalStateManager()
+        for p_name, p_list in patterns.items():
+            for p_str in p_list:
+                if s.endswith(p_str):
+                    pred = GameConstants.BIG if '_B' in p_name else GameConstants.SMALL
+                    return {'prediction': pred, 'source': f'Trend:{p_name}', 'weight': 0.9}
+        return None
+    except: return None
 
-def ultraAIPredict(history: List[Dict], current_bankroll: float = 10000.0, last_result: Optional[str] = None) -> Dict:
-    """
-    MAIN ENTRY POINT
-    """
-    # 1. Update Streak
-    if last_result:
-        actual_outcome = get_outcome_from_number(history[-1]['actual_number'])
-        if last_result == GameConstants.SKIP:
-            pass
-        elif last_result == actual_outcome:
-            state_manager.loss_streak = 0
-        else:
-            state_manager.loss_streak += 1
-            
-    streak = state_manager.loss_streak
-    
-    # 2. Run The Trident Engines
-    signals = []
-    
-    # Engine 1: Quantum
-    s1 = engine_quantum_adaptive(history)
-    if s1: signals.append(s1)
-    
-    # Engine 2: Deep Pattern
-    s2 = engine_deep_pattern_v3(history)
-    if s2: signals.append(s2)
-    
-    # Engine 3: Neural Net
-    s3 = engine_neural_perceptron(history)
-    if s3: signals.append(s3)
-    
-    # 3. Aggregate Signals
-    big_score = sum(s['weight'] for s in signals if s['prediction'] == GameConstants.BIG)
-    small_score = sum(s['weight'] for s in signals if s['prediction'] == GameConstants.SMALL)
-    
-    total_score = big_score + small_score
-    if total_score == 0:
-         return {'finalDecision': GameConstants.SKIP, 'confidence': 0, 'positionsize': 0, 'level': 'NO_SIG', 'reason': 'Silence', 'topsignals': []}
-         
-    # 4. Calculate Confidence
-    # Pure ratio of the winning side vs total
-    if big_score > small_score:
-        final_pred = GameConstants.BIG
-        confidence = big_score / (total_score + 0.1) # +0.1 prevents 100% fake confidence
-    else:
-        final_pred = GameConstants.SMALL
-        confidence = small_score / (total_score + 0.1)
-    
-    # Cap confidence at 0.99
-    confidence = min(confidence, 0.99)
-    
-    # 5. Determine Stake & Level
-    # Get active engine names for display
-    active_engine_names = [s['source'] for s in signals]
-    
-    stake = 0
-    level = "SKIP"
-    reason = f"Conf {confidence:.0%}"
-    
-    base_bet = max(current_bankroll * RiskConfig.BASE_RISK_PERCENT, RiskConfig.MIN_BET_AMOUNT)
-    
-    # --- LOGIC GATE ---
-    
-    # SCENARIO: SNIPER (2+ Losses) - Needs High Confidence
-    if streak >= 2:
-        if confidence >= RiskConfig.LVL3_MIN_CONFIDENCE:
-            stake = base_bet * RiskConfig.TIER_3_MULT
-            level = "🔥 SNIPER"
-            reason = "Neural+Pattern Lock"
-        else:
-            level = "SKIP (Recov)"
-            reason = f"Need {RiskConfig.LVL3_MIN_CONFIDENCE:.0%}"
-            
-    # SCENARIO: RECOVERY (1 Loss)
-    elif streak == 1:
-        if confidence >= RiskConfig.LVL2_MIN_CONFIDENCE:
-            stake = base_bet * RiskConfig.TIER_2_MULT
-            level = "RECOVERY"
-        else:
-            level = "SKIP (Recov)"
-    
-    # SCENARIO: STANDARD (0 Losses)
-    else:
-        if confidence >= RiskConfig.LVL1_MIN_CONFIDENCE:
-            stake = base_bet * RiskConfig.TIER_1_MULT
-            level = "STANDARD"
-        else:
-            level = "SKIP"
-            
-    # Hard Stop for Bankroll Protection
-    if stake > current_bankroll * 0.5: stake = current_bankroll * 0.5
-    
+# ==============================================================================
+# SECTION 5: MASTER PREDICTION LOGIC (THE API)
+# ==============================================================================
+
+def _skip(reason):
+    """Helper to generate a clean SKIP response."""
     return {
-        'finalDecision': final_pred if stake > 0 else GameConstants.SKIP,
-        'confidence': confidence,
-        'positionsize': int(stake),
-        'level': level,
+        'finalDecision': GameConstants.SKIP,
+        'confidence': 0.0,
+        'level': "---",
         'reason': reason,
-        'topsignals': active_engine_names
+        'topsignals': [],
+        'positionsize': 0
     }
 
+def _bet(decision, level, sources):
+    """Helper to generate a clean BET response."""
+    return {
+        'finalDecision': decision,
+        'confidence': 0.95,
+        'level': "SNIPER V14",
+        'reason': level,
+        'topsignals': sources,
+        'positionsize': 0
+    }
+
+def ultraAIPredict(history: List[Dict], current_bankroll: float, previous_pred_label: str) -> Dict:
+    """
+    THE MAIN BRAIN.
+    Strictly follows 'SniperConfig' to avoid weak signals.
+    """
+    
+    # --- 1. UPDATE INTERNAL STATE ---
+    # (Simple tracker, used for logs)
+    if len(history) > 1 and previous_pred_label not in [GameConstants.SKIP, "WAITING"]:
+        last_actual = get_outcome_from_number(history[-1]['actual_number'])
+        if last_actual == previous_pred_label:
+            state_manager.loss_streak = 0 
+        else:
+            state_manager.loss_streak += 1
+
+    # --- 2. SAFETY GUARDS (The Shield) ---
+    try:
+        last_num = int(safe_float(history[-1]['actual_number']))
+        
+        # A. VIOLET GUARD
+        if SniperConfig.SKIP_ON_0_5 and last_num in [0, 5]:
+             return _skip("Violet Protection (0/5)")
+             
+        # B. TREND WALL GUARD (Don't fight massive streaks)
+        if is_trend_wall_active(history):
+            return _skip("Trend Wall (Streak > 9)")
+            
+        # C. CHOPPY MARKET GUARD
+        if is_market_choppy(history):
+            return _skip("Choppy Market (Ping-Pong)")
+            
+    except Exception as e:
+        print(f"[WARN] Guard Error: {e}")
+
+    # --- 3. RUN THE 'BIG 3' ENGINES ---
+    signals = []
+    
+    # Engine A: Memory
+    res_mem = engine_deep_memory(history)
+    if res_mem: signals.append(res_mem)
+    
+    # Engine B: Bayes
+    res_bayes = engine_bayesian(history)
+    if res_bayes: signals.append(res_bayes)
+    
+    # Engine C: Trend
+    res_trend = engine_trend_patterns(history)
+    if res_trend: signals.append(res_trend)
+    
+    # --- 4. VOTE CONSENSUS & DECISION ---
+    if not signals:
+        return _skip("No Strong Signals")
+        
+    votes = [s['prediction'] for s in signals]
+    counts = Counter(votes)
+    top_pred, count = counts.most_common(1)[0]
+    
+    sources = [s['source'] for s in signals if s['prediction'] == top_pred]
+    
+    # RULE 1: Strong Consensus (2+ Engines Agree)
+    if count >= 2:
+        return _bet(top_pred, f"Sniper Confirm ({count}/3)", sources)
+        
+    # RULE 2: Solo Trend Signal (Dragon Exception)
+    # We trust the Trend engine alone IF it sees a Dragon/Pattern.
+    if count == 1 and "Trend" in sources[0]:
+        return _bet(top_pred, "Trend Following", sources)
+        
+    # RULE 3: Weak Signals (Solo Memory or Bayes) -> SKIP
+    # Without confirmation, these are too risky.
+    return _skip(f"Weak Signal ({sources[0]})")
+
 if __name__ == "__main__":
-    print("TITAN V200 TRIDENT LOADED.")
+    print("="*60)
+    print(f" TITAN V14.0 SNIPER LOADED")
+    print(f" STRICTNESS: EXTREME")
+    print("="*60)
