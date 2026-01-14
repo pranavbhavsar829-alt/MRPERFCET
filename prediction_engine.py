@@ -1,386 +1,364 @@
-# ==============================================================================
-# FILE: prediction_engine.py
-# PROJECT: TITAN V15.0 - AGGRESSIVE HYBRID (HIGH FREQUENCY TUNED)
-# ==============================================================================
-# This module provides the core logic for the Titan prediction system.
-# UPDATES:
-# - Lowered thresholds for higher participation (30-40% frequency).
-# - Enabled "Solo Signal" betting (no need for 2 engines to agree if 1 is strong).
-# - Added short-term momentum patterns.
-# ==============================================================================
+#!/usr/bin/env python3
+"""
+=============================================================================
+  TITAN V500 - CLOUD EDITION (RENDER READY)
+  
+  CHANGES FOR DEPLOYMENT:
+  1. Removed Ollama (Too heavy for Render).
+  2. Added Groq Cloud API (Runs Llama 3 for free/fast).
+  3. Fixed arguments to match fetcher.py.
+  4. Added graceful error handling (Bot works even if AI fails).
+=============================================================================
+"""
 
 import math
-from collections import Counter, defaultdict
+import statistics
+import random
+import traceback
+import json
+import warnings
+import time
+from collections import Counter
 from typing import Dict, List, Optional, Any
 
-# ==============================================================================
-# SECTION 1: CONFIGURATION (AGGRESSIVE SETTINGS)
-# ==============================================================================
+# --- NETWORK LIBRARY ---
+try:
+    import requests
+except ImportError:
+    print("[CRITICAL] 'requests' library missing. Install: pip install requests")
+    requests = None
 
-class SniperConfig:
-    """
-    Hybrid Settings: Aggressive on trends, Safe on chaos.
-    """
-    # 1. BAYESIAN ENGINE
-    # Lowered from 0.70 to 0.58 to catch more probabilistic edges.
-    BAYES_THRESHOLD = 0.58  
-    
-    # 2. DEEP MEMORY ENGINE
-    # We need at least 2 exact historical matches.
-    MIN_MEMORY_MATCHES = 2 
-    # Lowered edge requirement (12% edge is enough to bet).
-    MEMORY_EDGE_REQ = 0.12 
+# --- DATA SCIENCE LIBRARIES ---
+try:
+    import pandas as pd
+    import numpy as np
+    from scipy.stats import entropy
+    from sklearn.neural_network import MLPClassifier
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.preprocessing import StandardScaler
+except ImportError:
+    # On Render, if these fail, the bot will fall back to basic math engines
+    print("[WARNING] ML Libraries missing. Bot will run in 'Lite Mode'.")
+    pd = None 
 
-    # 3. SAFETY GUARDS
-    MAX_IDENTICAL_STREAK = 12  # Relaxed: Only stop if streak hits 12 (Dragon friendly).
-    CHOPPY_THRESHOLD = 12      # Relaxed: Allow a bit more chop before stopping.
-    SKIP_ON_0_5 = False        # Keep Violet avoidance off for maximum frequency.
+# Suppress warnings
+warnings.filterwarnings("ignore")
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
 
 class GameConstants:
-    """Core constants used across the system."""
     BIG = "BIG"
-    SMALL = "SMALL" 
+    SMALL = "SMALL"
     SKIP = "SKIP"
 
-# ==============================================================================
-# SECTION 2: UTILITIES & STATE MANAGEMENT
-# ==============================================================================
+class RiskConfig:
+    CONF_STRONG = 0.70
+    CONF_SNIPER = 0.85
+    MIN_BET = 50
+    STOP_LOSS_STREAK = 5
 
-def safe_float(value: Any) -> float:
-    """Safely converts input to float."""
-    try:
-        if value is None: return 4.5
-        return float(value)
+# --- CLOUD AI CONFIG (GROQ) ---
+# 1. Get a FREE key here: https://console.groq.com/keys
+# 2. Paste it below inside the quotes.
+GROQ_API_KEY = "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"  # <--- PASTE YOUR KEY HERE
+GROQ_MODEL = "llama3-8b-8192" 
+
+# =============================================================================
+# UTILS
+# =============================================================================
+
+def safe_float(value):
+    try: return float(value)
     except: return 4.5
 
-def get_outcome_from_number(n: Any) -> Optional[str]:
-    """
-    Converts number 0-9 to BIG/SMALL.
-    CRITICAL: This function name MUST match fetcher.py imports exactly.
-    """
+def get_outcome(n):
     val = int(safe_float(n))
-    if 0 <= val <= 4: return GameConstants.SMALL
-    if 5 <= val <= 9: return GameConstants.BIG
+    if 0 <= val <= 4: return "SMALL"
+    if 5 <= val <= 9: return "BIG"
     return None
 
-class GlobalStateManager:
-    """Tracks the bot's short-term memory."""
-    def __init__(self):
-        self.loss_streak = 0
-        self.last_round_predictions = {}
+def sigmoid(x):
+    try: return 1 / (1 + math.exp(-x))
+    except: return 0.0 if x < 0 else 1.0
 
-state_manager = GlobalStateManager()
+def calc_rsi(data, period=14):
+    if len(data) < period + 1: return 50.0
+    deltas = [data[i] - data[i-1] for i in range(1, len(data))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0: return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
 
-def reset_engine_memory():
-    """
-    Externally called by fetcher.py to wipe memory on session reset.
-    """
-    state_manager.loss_streak = 0
-    state_manager.last_round_predictions = {}
-    print("[ENGINE] Memory Wiped via External Reset.")
+# =============================================================================
+# ENGINE SET A: CLASSIC LOGIC (V200)
+# =============================================================================
 
-# ==============================================================================
-# SECTION 3: SAFETY GUARDS (THE SHIELD)
-# ==============================================================================
-
-def is_market_choppy(history: List[Dict]) -> bool:
-    """
-    Detects 'Ping-Pong' markets (e.g., B-S-B-S-B).
-    If market is too chaotic, we force a SKIP.
-    """
+def engine_quantum_adaptive(history):
+    """Bollinger Band Mean Reversion"""
     try:
-        if len(history) < 15: return False
+        nums = [safe_float(d['actual_number']) for d in history[-30:]]
+        if len(nums) < 20: return None
+        mean = statistics.mean(nums)
+        std = statistics.stdev(nums) if len(nums) > 1 else 0
+        if std == 0: return None
+        z = (nums[-1] - mean) / std
+        strength = min(abs(z) / 2.5, 1.0)
         
-        # Get last 12 outcomes
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-12:]]
-        outcomes = [o for o in outcomes if o] # Filter Nones
-        
-        if len(outcomes) < 10: return False
-        
-        # Count how many times the color switched vs stayed same
-        switches = 0
-        for i in range(1, len(outcomes)):
-            if outcomes[i] != outcomes[i-1]:
-                switches += 1
-        
-        # If it switches almost every time (e.g. 10/12 times), it's too risky.
-        return switches >= SniperConfig.CHOPPY_THRESHOLD
-    except: return False
+        if z > 1.6: return {'pred': "SMALL", 'conf': strength, 'name': 'QUANTUM'}
+        if z < -1.6: return {'pred': "BIG", 'conf': strength, 'name': 'QUANTUM'}
+    except: pass
+    return None
 
-def is_trend_wall_active(history: List[Dict]) -> bool:
-    """
-    Detects massive streaks (Dragon).
-    If we see 12+ results of the same color, we STOP predicting to avoid 'catching a falling knife'.
-    """
+def engine_deep_pattern_v3(history):
+    """Pattern Search"""
     try:
-        limit = SniperConfig.MAX_IDENTICAL_STREAK
-        if len(history) < limit: return False
+        if len(history) < 60: return None
+        outcomes = "".join(["B" if get_outcome(d['actual_number']) == "BIG" else "S" for d in history])
+        best_conf = 0
+        best_pred = None
+        best_name = "PATTERN"
         
-        # Get last 'limit' outcomes
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-limit:]]
-        first = outcomes[0]
-        
-        if not first: return False
-        
-        if all(o == first for o in outcomes):
-            return True 
-        return False
-    except: return False
-
-# ==============================================================================
-# SECTION 4: THE 3 ENGINES (TUNED FOR FREQUENCY)
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# ENGINE A: DEEP MEMORY (The Historian)
-# ------------------------------------------------------------------------------
-def engine_deep_memory(history: List[Dict]) -> Optional[Dict]:
-    """
-    Looks for the current pattern in the last 500 rounds.
-    """
-    try:
-        if len(history) < 50: return None
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
-        raw_str = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o])
-        
-        best_signal = None
-        highest_weight = 0
-
-        # Look for patterns of length 3 to 6 (Including shorter patterns now)
-        for depth in range(6, 2, -1):
-            curr_pattern = raw_str[-depth:]
-            search_area = raw_str[:-1]
+        for depth in range(6, 3, -1): 
+            pat = outcomes[-depth:]
+            search = outcomes[:-1]
+            cnt = search.count(pat)
+            if cnt < 3: continue
             
-            count_b = 0; count_s = 0; start = 0
-            
+            next_b = 0
+            start = 0
             while True:
-                idx = search_area.find(curr_pattern, start)
+                idx = search.find(pat, start)
                 if idx == -1: break
-                if idx + depth < len(search_area):
-                    next_char = search_area[idx + depth]
-                    if next_char == 'B': count_b += 1
-                    else: count_s += 1
+                if idx + depth < len(search):
+                    if search[idx+depth] == 'B': next_b += 1
                 start = idx + 1
             
-            total = count_b + count_s
+            prob_b = next_b / cnt
+            diff = abs(prob_b - 0.5) * 2 
             
-            if total >= SniperConfig.MIN_MEMORY_MATCHES:
-                prob_b = count_b / total
-                prob_s = count_s / total
-                
-                edge = abs(prob_b - prob_s)
-                # RELAXED: If we have a 12% edge, we consider it.
-                if edge >= SniperConfig.MEMORY_EDGE_REQ:
-                    weight = edge * (depth / 10) 
-                    if weight > highest_weight:
-                        highest_weight = weight
-                        pred = GameConstants.BIG if count_b > count_s else GameConstants.SMALL
-                        best_signal = {'prediction': pred, 'source': f'DeepMem({depth})', 'weight': weight}
+            if diff > best_conf and diff > 0.4:
+                best_conf = diff
+                best_pred = "BIG" if prob_b > 0.5 else "SMALL"
+                best_name = f"PATTERN({depth})"
+        
+        if best_conf > 0:
+            return {'pred': best_pred, 'conf': best_conf, 'name': best_name}
+    except: pass
+    return None
 
-        return best_signal
-    except: return None
-
-
-# ------------------------------------------------------------------------------
-# ENGINE B: BAYESIAN PROBABILITY (The Mathematician)
-# ------------------------------------------------------------------------------
-def engine_bayesian(history: List[Dict]) -> Optional[Dict]:
-    """
-    Calculates probability based on context (Trigrams).
-    """
+def engine_neural_perceptron(history):
+    """Simple Logic"""
     try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history]
-        cleaned = [o[0] for o in outcomes if o] 
+        nums = [safe_float(d['actual_number']) for d in history[-40:]]
+        if len(nums) < 25: return None
+        rsi = calc_rsi(nums)
+        norm_rsi = (rsi - 50) / 100
+        fast = statistics.mean(nums[-5:])
+        slow = statistics.mean(nums[-20:])
+        mom = (fast - slow) / 10
         
-        context_len = 3
-        if len(cleaned) < 10: return None
+        z = (norm_rsi * -1.5) + (mom * 1.2)
+        prob = sigmoid(z)
+        dist = abs(prob - 0.5) * 2
         
-        # Try Trigram (Last 3)
-        last_context = tuple(cleaned[-context_len:])
-        b_count = 0; s_count = 0
-        
-        for i in range(len(cleaned) - context_len - 1):
-            if tuple(cleaned[i : i+context_len]) == last_context:
-                next_val = cleaned[i+context_len]
-                if next_val == 'B': b_count += 1
-                elif next_val == 'S': s_count += 1
-        
-        total = b_count + s_count
-        
-        # Fallback to Bigram (Last 2) if Trigram has no data
-        if total == 0:
-            context_len = 2
-            last_context = tuple(cleaned[-context_len:])
-            for i in range(len(cleaned) - context_len - 1):
-                if tuple(cleaned[i : i+context_len]) == last_context:
-                    next_val = cleaned[i+context_len]
-                    if next_val == 'B': b_count += 1
-                    elif next_val == 'S': s_count += 1
-            total = b_count + s_count
+        if prob > 0.6: return {'pred': "BIG", 'conf': dist, 'name': 'PERCEPTRON'}
+        if prob < 0.4: return {'pred': "SMALL", 'conf': dist, 'name': 'PERCEPTRON'}
+    except: pass
+    return None
 
-        if total == 0: return None
-        
-        prob_b = b_count / total
-        prob_s = s_count / total
-        
-        # RELAXED: Return signal if > 58% certainty
-        if prob_b >= SniperConfig.BAYES_THRESHOLD:
-            return {'prediction': GameConstants.BIG, 'source': 'Bayes', 'weight': prob_b}
-        elif prob_s >= SniperConfig.BAYES_THRESHOLD:
-            return {'prediction': GameConstants.SMALL, 'source': 'Bayes', 'weight': prob_s}
+# =============================================================================
+# ENGINE SET B: AI BRAIN (V400)
+# =============================================================================
+
+class TitanBrain:
+    def __init__(self):
+        if pd:
+            self.clf_nn = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42) 
+            self.clf_rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+            self.scaler = StandardScaler()
+        else:
+            self.clf_nn = None
+        self.is_trained = False
+        self.last_ai_pred = None
+
+    def train(self, history):
+        if not self.clf_nn or len(history) < 100: return
+        if self.is_trained and len(history) % 50 != 0: return
+
+        try:
+            df = pd.DataFrame(history)
+            df['num'] = df['actual_number'].astype(int)
+            df['label'] = df['num'].apply(lambda x: 1 if x >= 5 else 0)
             
-        return None
-    except: return None
+            df['rmean'] = df['num'].rolling(10).mean()
+            def roll_ent(s): return entropy(s.value_counts(), base=2)
+            df['ent'] = df['num'].rolling(20).apply(roll_ent, raw=False)
+            
+            delta = df['num'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            df['rsi'] = 100 - (100 / (1 + (gain/loss)))
+            
+            df = df.fillna(0)
+            df['target'] = df['label'].shift(-1)
+            df = df.dropna()
+            
+            feats = ['rmean', 'ent', 'num', 'rsi'] 
+            X = df[feats]
+            y = df['target']
+            
+            X_s = self.scaler.fit_transform(X)
+            self.clf_nn.fit(X_s, y)
+            self.clf_rf.fit(X, y)
+            self.is_trained = True
+        except: pass
 
+    def predict(self, history):
+        if not self.is_trained: return 0.5
+        try:
+            df = pd.DataFrame(history)
+            df['num'] = df['actual_number'].astype(int)
+            df['rmean'] = df['num'].rolling(10).mean()
+            def roll_ent(s): return entropy(s.value_counts(), base=2)
+            df['ent'] = df['num'].rolling(20).apply(roll_ent, raw=False)
+            delta = df['num'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            df['rsi'] = 100 - (100 / (1 + (gain/loss)))
+            df = df.fillna(0)
+            
+            last = df.iloc[[-1]][['rmean', 'ent', 'num', 'rsi']]
+            
+            p1 = self.clf_nn.predict_proba(self.scaler.transform(last))[0][1]
+            p2 = self.clf_rf.predict_proba(last)[0][1]
+            return (p1 * 0.6) + (p2 * 0.4)
+        except: return 0.5
 
-# ------------------------------------------------------------------------------
-# ENGINE C: TITAN TREND (The Shape Scanner)
-# ------------------------------------------------------------------------------
-def engine_trend_patterns(history: List[Dict]) -> Optional[Dict]:
+    def ask_cloud_ai(self, history):
+        """Replaces Ollama with Groq (Cloud Llama 3)"""
+        if not requests or "gsk_" not in GROQ_API_KEY: 
+            return None
+            
+        # Limit API calls to every 5 rounds to avoid rate limits
+        if len(history) % 5 != 0: return self.last_ai_pred
+        
+        nums = [d['actual_number'] for d in history[-15:]]
+        prompt = f"Lottery Data: {nums}. The game is 'Big' (5-9) or 'Small' (0-4). Based on pattern, predict the ONE next outcome. Reply ONLY JSON: {{'prediction': 'BIG'}} or {{'prediction': 'SMALL'}}."
+        
+        try:
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": GROQ_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.5,
+                "response_format": {"type": "json_object"}
+            }
+            
+            resp = requests.post("https://api.groq.com/openai/v1/chat/completions", 
+                                 headers=headers, 
+                                 json=payload, 
+                                 timeout=3)
+            
+            if resp.status_code == 200:
+                js = resp.json()
+                content = js['choices'][0]['message']['content']
+                pred = json.loads(content).get('prediction')
+                if pred in ["BIG", "SMALL"]:
+                    self.last_ai_pred = pred
+                    return pred
+        except Exception as e: 
+            print(f"[AI ERROR] {e}")
+            pass
+            
+        return self.last_ai_pred
+
+brain = TitanBrain()
+
+# =============================================================================
+# MAIN CONTROLLER
+# =============================================================================
+
+def ultraAIPredict(history: List[Dict], current_bankroll: float, last_outcome: str = "WAITING") -> Dict:
     """
-    Standard Chart Patterns.
-    EXPANDED: Now includes ZigZags and simple repeats.
+    Main entry point called by fetcher.py
     """
-    try:
-        outcomes = [get_outcome_from_number(d.get('actual_number')) for d in history[-20:]]
-        s = ''.join(['B' if o==GameConstants.BIG else 'S' for o in outcomes if o])
-        if not s: return None
-
-        patterns = {
-            # 1. DRAGON (Strong Momentum)
-            'Dragon_B': ['BBBB'], 
-            'Dragon_S': ['SSSS'],
-            
-            # 2. PING PONG (1v1)
-            'PingPong_B': ['SBSB'], # Expect B
-            'PingPong_S': ['BSBS'], # Expect S
-            
-            # 3. DOUBLE STAIRS
-            '2v2_B': ['SSBBSS'], 
-            '2v2_S': ['BBSSBB'],
-            
-            # 4. ZIG ZAG (A-B-A) - NEW!
-            'ZigZag_B': ['BSB'], # Expect S (Break) or B (Continue)? 
-                                 # Usually, BSB -> S is chop. BSB -> B is difficult.
-                                 # Let's stick to reversal patterns:
-            'Flip_B':   ['SSB'], # AAB pattern, expecting B continuation
-            'Flip_S':   ['BBS'], # AAB pattern, expecting S continuation
-        }
+    # 1. Train Brain (if data sufficient)
+    brain.train(history)
+    
+    signals = []
+    
+    # 2. RUN CLASSIC ENGINES
+    if (e1 := engine_quantum_adaptive(history)): signals.append(e1)
+    if (e2 := engine_deep_pattern_v3(history)): signals.append(e2)
+    if (e3 := engine_neural_perceptron(history)): signals.append(e3)
+    
+    # 3. RUN ML BRAIN (Scikit-Learn)
+    ml_prob = brain.predict(history)
+    if ml_prob > 0.60:
+        signals.append({'pred': "BIG", 'conf': ml_prob, 'name': 'ML_SCI'})
+    elif ml_prob < 0.40:
+        signals.append({'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_SCI'})
         
-        for p_name, p_list in patterns.items():
-            for p_str in p_list:
-                if s.endswith(p_str):
-                    pred = GameConstants.BIG if '_B' in p_name else GameConstants.SMALL
-                    return {'prediction': pred, 'source': f'Trend:{p_name}', 'weight': 0.85}
-        return None
-    except: return None
+    # 4. RUN CLOUD AI (Groq / Llama 3)
+    ai_pred = brain.ask_cloud_ai(history)
+    if ai_pred:
+        signals.append({'pred': ai_pred, 'conf': 0.65, 'name': 'CLOUD_AI'})
+        
+    # 5. VOTE AGGREGATION
+    votes = {"BIG": 0.0, "SMALL": 0.0}
+    log_reasons = []
+    
+    for s in signals:
+        w = 1.0
+        if s['name'] == 'ML_SCI': w = 1.5
+        if s['name'] == 'QUANTUM': w = 1.2
+        if s['name'] == 'CLOUD_AI': w = 1.3
+        
+        votes[s['pred']] += s['conf'] * w
+        log_reasons.append(f"{s['name']}")
+        
+    total = votes["BIG"] + votes["SMALL"]
+    
+    decision = "SKIP"
+    conf = 0.0
+    level = "---"
+    reason_text = "Analyzing..."
 
-# ==============================================================================
-# SECTION 5: MASTER PREDICTION LOGIC (THE API)
-# ==============================================================================
+    if total > 0:
+        if votes["BIG"] > votes["SMALL"]:
+            decision = "BIG"
+            conf = votes["BIG"] / total
+        else:
+            decision = "SMALL"
+            conf = votes["SMALL"] / total
+        
+        reason_text = f"Signals: {', '.join(list(set(log_reasons)))}"
 
-def _skip(reason):
-    return {
-        'finalDecision': GameConstants.SKIP,
-        'confidence': 0.0,
-        'level': "---",
-        'reason': reason,
-        'topsignals': [],
-        'positionsize': 0
-    }
-
-def _bet(decision, level, sources, conf=0.8):
+    # 6. RISK MANAGEMENT
+    stake = RiskConfig.MIN_BET
+    level = "STD"
+    
+    if conf > RiskConfig.CONF_SNIPER:
+        stake *= 2
+        level = "SNIPER 🔥"
+    elif conf < 0.55:
+        decision = "SKIP"
+        stake = 0
+        level = "LOW_CONF"
+        reason_text = "Low Confidence (<55%)"
+        
     return {
         'finalDecision': decision,
         'confidence': conf,
+        'positionsize': int(stake),
         'level': level,
-        'reason': "+".join(sources),
-        'topsignals': sources,
-        'positionsize': 0
+        'reason': reason_text
     }
-
-def ultraAIPredict(history: List[Dict], current_bankroll: float, previous_pred_label: str) -> Dict:
-    """
-    THE AGGRESSIVE HYBRID BRAIN.
-    """
-    
-    # --- 1. UPDATE INTERNAL STATE ---
-    if len(history) > 1 and previous_pred_label not in [GameConstants.SKIP, "WAITING"]:
-        last_actual = get_outcome_from_number(history[-1]['actual_number'])
-        if last_actual == previous_pred_label:
-            state_manager.loss_streak = 0 
-        else:
-            state_manager.loss_streak += 1
-
-    # --- 2. SAFETY GUARDS ---
-    # We still check guards, but they are slightly relaxed in config.
-    try:
-        last_num = int(safe_float(history[-1]['actual_number']))
-        
-        if SniperConfig.SKIP_ON_0_5 and last_num in [0, 5]:
-             return _skip("Violet Protection")
-             
-        if is_trend_wall_active(history):
-            return _skip("Trend Wall Limit")
-            
-        if is_market_choppy(history):
-            return _skip("Choppy Market")
-            
-    except Exception as e:
-        print(f"[WARN] Guard Error: {e}")
-
-    # --- 3. RUN ENGINES ---
-    signals = []
-    
-    # Engine A: Memory
-    res_mem = engine_deep_memory(history)
-    if res_mem: signals.append(res_mem)
-    
-    # Engine B: Bayes
-    res_bayes = engine_bayesian(history)
-    if res_bayes: signals.append(res_bayes)
-    
-    # Engine C: Trend
-    res_trend = engine_trend_patterns(history)
-    if res_trend: signals.append(res_trend)
-    
-    # --- 4. DECISION LOGIC (AGGRESSIVE) ---
-    if not signals:
-        return _skip("No Pattern Found")
-        
-    votes = [s['prediction'] for s in signals]
-    counts = Counter(votes)
-    top_pred, count = counts.most_common(1)[0]
-    
-    sources = [s['source'] for s in signals if s['prediction'] == top_pred]
-    
-    # LOGIC A: CONSENSUS (Best)
-    # If 2 or more engines agree -> HIGH CONFIDENCE
-    if count >= 2:
-        return _bet(top_pred, "TITAN CONFIRM", sources, conf=0.95)
-
-    # LOGIC B: STRONG SOLO (Aggressive)
-    # If only 1 engine agrees, but it's a strong signal, we TAKE IT.
-    single_signal = [s for s in signals if s['prediction'] == top_pred][0]
-    
-    # Case 1: Trend Engine is usually reliable for simple patterns
-    if "Trend" in single_signal['source']:
-        return _bet(top_pred, "Trend Play", sources, conf=0.80)
-        
-    # Case 2: Deep Memory found a very strong match (>15% edge)
-    if "DeepMem" in single_signal['source'] and single_signal['weight'] > 0.15:
-         return _bet(top_pred, "Hist Pattern", sources, conf=0.75)
-         
-    # Case 3: Bayes is very sure (>65%)
-    if "Bayes" in single_signal['source'] and single_signal['weight'] > 0.65:
-        return _bet(top_pred, "Math Prob", sources, conf=0.75)
-
-    # LOGIC C: WEAK SOLO (Skip)
-    # If we only have 1 weak signal (e.g. Bayes 58%), we still skip to avoid total garbage.
-    return _skip(f"Weak {sources[0]}")
-
-if __name__ == "__main__":
-    print("="*60)
-    print(f" TITAN V15.0 AGGRESSIVE LOADED")
-    print(f" FREQUENCY: HIGH (30-50%)")
-    print("="*60)
