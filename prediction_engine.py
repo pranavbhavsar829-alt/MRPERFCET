@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-  TITAN V500 - CLOUD EDITION (RENDER READY)
+  TITAN V500 - CLOUD EDITION (RENDER FIX V3)
   
-  CHANGES FOR DEPLOYMENT:
-  1. Removed Ollama (Too heavy for Render).
-  2. Added Groq Cloud API (Runs Llama 3 for free/fast).
-  3. Fixed arguments to match fetcher.py.
-  4. Added graceful error handling (Bot works even if AI fails).
+  FINAL FIXES:
+  1. Added 'reset_engine_memory' (Fixes the critical import error).
+  2. Retained 'get_outcome_from_number' (Fixes the previous error).
+  3. Groq Cloud AI & Sync/Async compatibility included.
 =============================================================================
 """
 
@@ -37,7 +36,6 @@ try:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.preprocessing import StandardScaler
 except ImportError:
-    # On Render, if these fail, the bot will fall back to basic math engines
     print("[WARNING] ML Libraries missing. Bot will run in 'Lite Mode'.")
     pd = None 
 
@@ -60,8 +58,7 @@ class RiskConfig:
     STOP_LOSS_STREAK = 5
 
 # --- CLOUD AI CONFIG (GROQ) ---
-# 1. Get a FREE key here: https://console.groq.com/keys
-# 2. Paste it below inside the quotes.
+# PASTE YOUR GROQ KEY BELOW
 GROQ_API_KEY = "gsk_..."  # <--- PASTE YOUR KEY HERE
 GROQ_MODEL = "llama3-8b-8192" 
 
@@ -99,7 +96,6 @@ def calc_rsi(data, period=14):
 # =============================================================================
 
 def engine_quantum_adaptive(history):
-    """Bollinger Band Mean Reversion"""
     try:
         nums = [safe_float(d['actual_number']) for d in history[-30:]]
         if len(nums) < 20: return None
@@ -115,7 +111,6 @@ def engine_quantum_adaptive(history):
     return None
 
 def engine_deep_pattern_v3(history):
-    """Pattern Search"""
     try:
         if len(history) < 60: return None
         outcomes = "".join(["B" if get_outcome_from_number(d['actual_number']) == "BIG" else "S" for d in history])
@@ -152,7 +147,6 @@ def engine_deep_pattern_v3(history):
     return None
 
 def engine_neural_perceptron(history):
-    """Simple Logic"""
     try:
         nums = [safe_float(d['actual_number']) for d in history[-40:]]
         if len(nums) < 25: return None
@@ -185,6 +179,13 @@ class TitanBrain:
             self.clf_nn = None
         self.is_trained = False
         self.last_ai_pred = None
+
+    def reset(self):
+        """Forces a brain reset"""
+        self.is_trained = False
+        self.last_ai_pred = None
+        if pd:
+             self.clf_nn = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42) 
 
     def train(self, history):
         if not self.clf_nn or len(history) < 100: return
@@ -240,15 +241,12 @@ class TitanBrain:
         except: return 0.5
 
     def ask_cloud_ai(self, history):
-        """Replaces Ollama with Groq (Cloud Llama 3)"""
         if not requests or "gsk_" not in GROQ_API_KEY: 
             return None
-            
-        # Limit API calls to every 5 rounds to avoid rate limits
         if len(history) % 5 != 0: return self.last_ai_pred
         
         nums = [d['actual_number'] for d in history[-15:]]
-        prompt = f"Lottery Data: {nums}. The game is 'Big' (5-9) or 'Small' (0-4). Based on pattern, predict the ONE next outcome. Reply ONLY JSON: {{'prediction': 'BIG'}} or {{'prediction': 'SMALL'}}."
+        prompt = f"Data: {nums}. The game is 'Big' (5-9) or 'Small' (0-4). Predict next ONE result. Reply ONLY JSON: {{'prediction': 'BIG'}}."
         
         try:
             headers = {
@@ -274,45 +272,40 @@ class TitanBrain:
                 if pred in ["BIG", "SMALL"]:
                     self.last_ai_pred = pred
                     return pred
-        except Exception as e: 
-            print(f"[AI ERROR] {e}")
-            pass
-            
+        except: pass
         return self.last_ai_pred
 
 brain = TitanBrain()
 
 # =============================================================================
-# MAIN CONTROLLER
+# EXPOSED FUNCTIONS
 # =============================================================================
 
+# *** CRITICAL FIX: Added this function to satisfy fetcher import ***
+def reset_engine_memory():
+    """Called by fetcher when logic needs a hard reset."""
+    brain.reset()
+    print("[BRAIN] Neural Memory Wiped (Reset Triggered)")
+
 def ultraAIPredict(history: List[Dict], current_bankroll: float, last_outcome: str = "WAITING") -> Dict:
-    """
-    Main entry point called by fetcher.py
-    """
-    # 1. Train Brain (if data sufficient)
     brain.train(history)
     
     signals = []
     
-    # 2. RUN CLASSIC ENGINES
     if (e1 := engine_quantum_adaptive(history)): signals.append(e1)
     if (e2 := engine_deep_pattern_v3(history)): signals.append(e2)
     if (e3 := engine_neural_perceptron(history)): signals.append(e3)
     
-    # 3. RUN ML BRAIN (Scikit-Learn)
     ml_prob = brain.predict(history)
     if ml_prob > 0.60:
         signals.append({'pred': "BIG", 'conf': ml_prob, 'name': 'ML_SCI'})
     elif ml_prob < 0.40:
         signals.append({'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_SCI'})
         
-    # 4. RUN CLOUD AI (Groq / Llama 3)
     ai_pred = brain.ask_cloud_ai(history)
     if ai_pred:
         signals.append({'pred': ai_pred, 'conf': 0.65, 'name': 'CLOUD_AI'})
         
-    # 5. VOTE AGGREGATION
     votes = {"BIG": 0.0, "SMALL": 0.0}
     log_reasons = []
     
@@ -342,7 +335,6 @@ def ultraAIPredict(history: List[Dict], current_bankroll: float, last_outcome: s
         
         reason_text = f"Signals: {', '.join(list(set(log_reasons)))}"
 
-    # 6. RISK MANAGEMENT
     stake = RiskConfig.MIN_BET
     level = "STD"
     
