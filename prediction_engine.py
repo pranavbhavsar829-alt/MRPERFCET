@@ -62,7 +62,7 @@ class RiskConfig:
 # --- CLOUD AI CONFIG (GROQ) ---
 # 1. Get a FREE key here: https://console.groq.com/keys
 # 2. Paste it below inside the quotes.
-GROQ_API_KEY = "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"  # <--- PASTE YOUR KEY HERE
+GROQ_API_KEY = "gsk_..."  # <--- PASTE YOUR KEY HERE
 GROQ_MODEL = "llama3-8b-8192" 
 
 # =============================================================================
@@ -73,7 +73,7 @@ def safe_float(value):
     try: return float(value)
     except: return 4.5
 
-def get_outcome(n):
+def get_outcome_from_number(n):
     val = int(safe_float(n))
     if 0 <= val <= 4: return "SMALL"
     if 5 <= val <= 9: return "BIG"
@@ -118,7 +118,7 @@ def engine_deep_pattern_v3(history):
     """Pattern Search"""
     try:
         if len(history) < 60: return None
-        outcomes = "".join(["B" if get_outcome(d['actual_number']) == "BIG" else "S" for d in history])
+        outcomes = "".join(["B" if get_outcome_from_number(d['actual_number']) == "BIG" else "S" for d in history])
         best_conf = 0
         best_pred = None
         best_name = "PATTERN"
