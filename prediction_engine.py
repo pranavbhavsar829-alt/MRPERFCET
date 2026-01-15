@@ -1,4 +1,14 @@
-
+#!/usr/bin/env python3
+"""
+=============================================================================
+  TITAN V700 - STRICT HIERARCHY (RENDER COMPATIBLE)
+  
+  FIXES:
+  1. Added 'reset_engine_memory' to fix the Import Error.
+  2. Implements Strict Level 1/2/3 Logic.
+  3. Uses Ollama (Local) or falls back gracefully.
+=============================================================================
+"""
 
 import math
 import statistics
@@ -38,7 +48,6 @@ class GameConstants:
     SKIP = "SKIP"
 
 class RiskConfig:
-    # We rely on Engine Combinations now, not just raw confidence scores
     MIN_BET = 50
     STOP_LOSS_STREAK = 5
 
@@ -214,7 +223,6 @@ class TitanBrain:
             current_mean = last['rmean'].values[0]
             ml_confidence = (p1 * 0.5) + (p2 * 0.5)
             
-            # Anti-Bias: Mean Reversion
             if current_mean > 7.0: ml_confidence -= 0.15 
             if current_mean < 2.0: ml_confidence += 0.15 
 
@@ -224,7 +232,6 @@ class TitanBrain:
     async def ask_ollama(self, history):
         if len(history) % 5 != 0: return self.last_ollama_pred
         nums = [d['actual_number'] for d in history[-15:]]
-        # Neutral Prompt
         prompt = f"Data: {nums}. Analyze trend. Next likely? Reply JSON: {{'prediction': 'SMALL' or 'BIG'}}"
         try:
             async with aiohttp.ClientSession() as s:
@@ -241,17 +248,19 @@ class TitanBrain:
 brain = TitanBrain()
 
 # =============================================================================
-# MAIN CONTROLLER - STRICT PRIORITY LOGIC
+# EXPORTED FUNCTION: RESET MEMORY (CRITICAL FIX)
+# =============================================================================
+def reset_engine_memory():
+    """Clears the AI memory when a win/loss streak limit is hit."""
+    global brain
+    brain = TitanBrain()
+    print("[ENGINE] Memory Wiped (Circuit Breaker Reset)")
+
+# =============================================================================
+# MAIN CONTROLLER - STRICT PRIORITY
 # =============================================================================
 
 def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str = "") -> Dict:
-    """
-    STRICT RULES:
-    L1: Any 2 Engines (Scouts)
-    L2: ML BRAIN + OLLAMA (The Commanders)
-    L3: ML + OLLAMA + 1 OTHER (The Kill Squad)
-    """
-    
     # 1. Train & Run Async Ollama
     brain.train(history)
     try:
@@ -299,7 +308,6 @@ def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str
     avg_conf = total_conf / (total_conf + total_opp) if (total_conf + total_opp) > 0 else 0
 
     # --- STRICT HIERARCHY CHECKS ---
-    
     supporting_names = [s['name'] for s in winning_team]
     count = len(winning_team)
     
@@ -309,24 +317,22 @@ def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str
     stake = 0
     level_name = f"WAITING ({count} Votes)"
     
-    # LEVEL 1: Any 2 Engines
+    # LEVEL 1: Any 2 Engines (Scouts)
     if count >= 2:
         level_name = "L1_SCOUT"
         stake = RiskConfig.MIN_BET
     
     # LEVEL 2: ML + OLLAMA (Strict Requirement)
-    # The prompt: "for 2nd level ml+ollama"
     if has_ml and has_ollama:
         level_name = "L2_LEADER (ML+AI)"
         stake = RiskConfig.MIN_BET
     
-    # LEVEL 3: ML + OLLAMA + 1 OTHER
-    # The prompt: "trd level ollama+ml+one enginns"
+    # LEVEL 3: ML + OLLAMA + 1 OTHER (Sniper)
     if has_ml and has_ollama and count >= 3:
         level_name = "L3_SNIPER"
         stake = RiskConfig.MIN_BET
 
-    # FAILSAFE: If we found a winner but didn't hit Level 1 (e.g. only 1 engine), SKIP.
+    # FAILSAFE: If no level triggers, SKIP.
     if level_name.startswith("WAITING"):
         decision = "SKIP"
         stake = 0
