@@ -1,18 +1,4 @@
-#!/usr/bin/env python3
-"""
-=============================================================================
-  TITAN V700 - STRICT HIERARCHY (ML & OLLAMA COMMANDER MODE)
-  
-  LOGIC HIERARCHY:
-  1. LEVEL 1 (Scout):  Consensus of ANY 2 Engines.
-  2. LEVEL 2 (Leader): Consensus of ML BRAIN + OLLAMA (Must Agree).
-  3. LEVEL 3 (Sniper): Consensus of ML + OLLAMA + 1 OTHER ENGINE.
 
-  BIAS PROTECTION:
-  - Neutral Ollama Prompts (No "BIG" forcing).
-  - ML Mean Reversion (Prevents blind trend chasing).
-=============================================================================
-"""
 
 import math
 import statistics
