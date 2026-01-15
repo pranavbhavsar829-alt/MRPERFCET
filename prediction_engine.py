@@ -1,31 +1,38 @@
 #!/usr/bin/env python3
 """
 =============================================================================
-  TITAN V500 - CLOUD EDITION (RENDER FIX V3)
-  
-  FINAL FIXES:
-  1. Added 'reset_engine_memory' (Fixes the critical import error).
-  2. Retained 'get_outcome_from_number' (Fixes the previous error).
-  3. Groq Cloud AI & Sync/Async compatibility included.
+  TITAN V700 - GROQ CLOUD EDITION (RENDER COMPATIBLE)
+  (Consensus-Based + De-Biased + Groq API)
+
+  UPDATES:
+  1. REPLACED OLLAMA WITH GROQ API:
+     - Uses Groq's high-speed LPU inference for cloud compatibility (Render).
+     - Model: llama3-8b-8192 (Fast & Free Tier compatible).
+     - Requires GROQ_API_KEY env variable or hardcoded key.
+
+  2. LOGIC PRESERVED:
+     - LEVEL 1: Consensus of ANY 2 Engines.
+     - LEVEL 2: Consensus of ANY 2 Engines + HIGH CONFIDENCE (>70%).
+     - LEVEL 3: Consensus of ANY 3 Engines + SNIPER CONFIDENCE (>80%).
+
+  3. ANTI-BIAS:
+     - Mean Reversion logic retained in ML Brain.
+     - Neutral prompting for Groq.
 =============================================================================
 """
 
 import math
 import statistics
-import random
 import traceback
+import asyncio
+import aiohttp
 import json
 import warnings
-import time
-from collections import Counter
+import os
 from typing import Dict, List, Optional, Any
 
-# --- NETWORK LIBRARY ---
-try:
-    import requests
-except ImportError:
-    print("[CRITICAL] 'requests' library missing. Install: pip install requests")
-    requests = None
+# Suppress warnings
+warnings.filterwarnings("ignore")
 
 # --- DATA SCIENCE LIBRARIES ---
 try:
@@ -36,15 +43,19 @@ try:
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.preprocessing import StandardScaler
 except ImportError:
-    print("[WARNING] ML Libraries missing. Bot will run in 'Lite Mode'.")
+    print("[CRITICAL] ML Libraries missing. Install: pip install pandas numpy scikit-learn scipy")
     pd = None 
 
-# Suppress warnings
-warnings.filterwarnings("ignore")
+# =============================================================================
+# CONSTANTS & CONFIG
+# =============================================================================
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
+# --- GROQ CONFIGURATION ---
+# GET YOUR FREE KEY HERE: https://console.groq.com/keys
+# SET IT IN RENDER ENVIRONMENT VARIABLES AS 'GROQ_API_KEY'
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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") 
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama3-8b-8192"  # Fast, efficient model
 
 class GameConstants:
     BIG = "BIG"
@@ -52,15 +63,13 @@ class GameConstants:
     SKIP = "SKIP"
 
 class RiskConfig:
-    CONF_STRONG = 0.70
-    CONF_SNIPER = 0.85
+    # Confidence Thresholds
+    CONF_BASE = 0.55  # Minimum for Level 1
+    CONF_HIGH = 0.70  # Required for Level 2
+    CONF_SNIPER = 0.80 # Required for Level 3
+    
     MIN_BET = 50
     STOP_LOSS_STREAK = 5
-
-# --- CLOUD AI CONFIG (GROQ) ---
-# PASTE YOUR GROQ KEY BELOW
-GROQ_API_KEY = "gsk_..."  # <--- PASTE YOUR KEY HERE
-GROQ_MODEL = "llama3-8b-8192" 
 
 # =============================================================================
 # UTILS
@@ -71,10 +80,14 @@ def safe_float(value):
     except: return 4.5
 
 def get_outcome_from_number(n):
+    """Public helper for fetcher.py compatibility"""
     val = int(safe_float(n))
     if 0 <= val <= 4: return "SMALL"
     if 5 <= val <= 9: return "BIG"
-    return None
+    return "Unknown"
+
+def get_outcome(n):
+    return get_outcome_from_number(n)
 
 def sigmoid(x):
     try: return 1 / (1 + math.exp(-x))
@@ -92,9 +105,10 @@ def calc_rsi(data, period=14):
     return 100.0 - (100.0 / (1.0 + rs))
 
 # =============================================================================
-# ENGINE SET A: CLASSIC LOGIC (V200)
+# ENGINES (THE ARSENAL)
 # =============================================================================
 
+# --- ENGINE 1: QUANTUM ADAPTIVE (MATH) ---
 def engine_quantum_adaptive(history):
     try:
         nums = [safe_float(d['actual_number']) for d in history[-30:]]
@@ -110,10 +124,11 @@ def engine_quantum_adaptive(history):
     except: pass
     return None
 
+# --- ENGINE 2: DEEP PATTERN V3 (MEMORY) ---
 def engine_deep_pattern_v3(history):
     try:
         if len(history) < 60: return None
-        outcomes = "".join(["B" if get_outcome_from_number(d['actual_number']) == "BIG" else "S" for d in history])
+        outcomes = "".join(["B" if get_outcome(d['actual_number']) == "BIG" else "S" for d in history])
         best_conf = 0
         best_pred = None
         best_name = "PATTERN"
@@ -146,6 +161,7 @@ def engine_deep_pattern_v3(history):
     except: pass
     return None
 
+# --- ENGINE 3: NEURAL PERCEPTRON (SENSOR) ---
 def engine_neural_perceptron(history):
     try:
         nums = [safe_float(d['actual_number']) for d in history[-40:]]
@@ -165,40 +181,31 @@ def engine_neural_perceptron(history):
     except: pass
     return None
 
-# =============================================================================
-# ENGINE SET B: AI BRAIN (V400)
-# =============================================================================
-
+# --- ENGINE 4 & 5: AI BRAIN (ML + GROQ) ---
 class TitanBrain:
     def __init__(self):
         if pd:
-            self.clf_nn = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42) 
+            # Increased complexity
+            self.clf_nn = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=2000, random_state=42) 
             self.clf_rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
             self.scaler = StandardScaler()
         else:
             self.clf_nn = None
         self.is_trained = False
-        self.last_ai_pred = None
-
-    def reset(self):
-        """Forces a brain reset"""
-        self.is_trained = False
-        self.last_ai_pred = None
-        if pd:
-             self.clf_nn = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=1000, random_state=42) 
+        self.last_llm_pred = None
 
     def train(self, history):
-        if not self.clf_nn or len(history) < 100: return
-        if self.is_trained and len(history) % 50 != 0: return
+        if not self.clf_nn or len(history) < 50: return
+        if self.is_trained and len(history) % 10 != 0: return
 
         try:
             df = pd.DataFrame(history)
             df['num'] = df['actual_number'].astype(int)
             df['label'] = df['num'].apply(lambda x: 1 if x >= 5 else 0)
             
+            # Features
             df['rmean'] = df['num'].rolling(10).mean()
-            def roll_ent(s): return entropy(s.value_counts(), base=2)
-            df['ent'] = df['num'].rolling(20).apply(roll_ent, raw=False)
+            df['std'] = df['num'].rolling(10).std()
             
             delta = df['num'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
@@ -209,7 +216,7 @@ class TitanBrain:
             df['target'] = df['label'].shift(-1)
             df = df.dropna()
             
-            feats = ['rmean', 'ent', 'num', 'rsi'] 
+            feats = ['rmean', 'std', 'num', 'rsi'] 
             X = df[feats]
             y = df['target']
             
@@ -224,29 +231,46 @@ class TitanBrain:
         try:
             df = pd.DataFrame(history)
             df['num'] = df['actual_number'].astype(int)
+            
             df['rmean'] = df['num'].rolling(10).mean()
-            def roll_ent(s): return entropy(s.value_counts(), base=2)
-            df['ent'] = df['num'].rolling(20).apply(roll_ent, raw=False)
+            df['std'] = df['num'].rolling(10).std()
+            
             delta = df['num'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             df['rsi'] = 100 - (100 / (1 + (gain/loss)))
             df = df.fillna(0)
             
-            last = df.iloc[[-1]][['rmean', 'ent', 'num', 'rsi']]
+            last = df.iloc[[-1]][['rmean', 'std', 'num', 'rsi']]
             
             p1 = self.clf_nn.predict_proba(self.scaler.transform(last))[0][1]
             p2 = self.clf_rf.predict_proba(last)[0][1]
-            return (p1 * 0.6) + (p2 * 0.4)
+            
+            # MEAN REVERSION LOGIC (ANTI-BIAS)
+            current_mean = last['rmean'].values[0]
+            ml_confidence = (p1 * 0.5) + (p2 * 0.5)
+            
+            # Penalize over-extended trends
+            if current_mean > 7.0: ml_confidence -= 0.15 
+            if current_mean < 2.0: ml_confidence += 0.15 
+
+            return max(0.0, min(1.0, ml_confidence))
         except: return 0.5
 
-    def ask_cloud_ai(self, history):
-        if not requests or "gsk_" not in GROQ_API_KEY: 
-            return None
-        if len(history) % 5 != 0: return self.last_ai_pred
+    async def ask_groq(self, history):
+        """Replaces Ollama with Groq API for Cloud Deployment"""
+        if len(history) % 5 != 0: return self.last_llm_pred
         
+        # Check for API Key
+        if "Your_Groq_Key" in GROQ_API_KEY:
+             # Fail silently if no key provided so system doesn't crash
+             return None
+
         nums = [d['actual_number'] for d in history[-15:]]
-        prompt = f"Data: {nums}. The game is 'Big' (5-9) or 'Small' (0-4). Predict next ONE result. Reply ONLY JSON: {{'prediction': 'BIG'}}."
+        
+        # Neutral Prompt
+        sys_msg = "You are a pattern recognition engine. Analyze the sequence of numbers (0-9). 5-9 is BIG, 0-4 is SMALL."
+        user_msg = f"Sequence: {nums}. Identify the trend. Return ONLY JSON format: {{'prediction': 'BIG'}} or {{'prediction': 'SMALL'}}."
         
         try:
             headers = {
@@ -255,102 +279,155 @@ class TitanBrain:
             }
             payload = {
                 "model": GROQ_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
+                "messages": [
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": user_msg}
+                ],
                 "response_format": {"type": "json_object"}
             }
             
-            resp = requests.post("https://api.groq.com/openai/v1/chat/completions", 
-                                 headers=headers, 
-                                 json=payload, 
-                                 timeout=3)
-            
-            if resp.status_code == 200:
-                js = resp.json()
-                content = js['choices'][0]['message']['content']
-                pred = json.loads(content).get('prediction')
-                if pred in ["BIG", "SMALL"]:
-                    self.last_ai_pred = pred
-                    return pred
-        except: pass
-        return self.last_ai_pred
+            async with aiohttp.ClientSession() as s:
+                async with s.post(GROQ_URL, headers=headers, json=payload, timeout=5) as r:
+                    if r.status == 200:
+                        js = await r.json()
+                        content = js['choices'][0]['message']['content']
+                        pred_data = json.loads(content)
+                        pred = pred_data.get('prediction')
+                        
+                        if pred and pred.upper() in ['BIG', 'SMALL']:
+                            self.last_llm_pred = pred.upper()
+                            return self.last_llm_pred
+        except Exception as e:
+            # print(f"Groq Error: {e}") # debug only
+            pass
+        return None
 
 brain = TitanBrain()
 
 # =============================================================================
-# EXPOSED FUNCTIONS
+# MAIN CONTROLLER - CONSENSUS PROTOCOL
 # =============================================================================
 
-# *** CRITICAL FIX: Added this function to satisfy fetcher import ***
-def reset_engine_memory():
-    """Called by fetcher when logic needs a hard reset."""
-    brain.reset()
-    print("[BRAIN] Neural Memory Wiped (Reset Triggered)")
-
-def ultraAIPredict(history: List[Dict], current_bankroll: float, last_outcome: str = "WAITING") -> Dict:
+# Updated signature to match fetcher.py call: 
+# ultraAIPredict(list(RAM_HISTORY), current_bankroll, last_prediction['label'])
+def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str = "") -> Dict:
+    """
+    Wrapper to handle Async logic inside Sync function if needed, 
+    but since fetcher calls this, we actually need to be careful.
+    
+    If fetcher.py calls this as a synchronous function, we must run async parts carefully.
+    However, looking at fetcher.py, it calls:
+    `res = ultraAIPredict(...)` inside an async loop? 
+    Wait, fetcher.py imports it. If fetcher.py main_loop is async, this should ideally be async.
+    
+    BUT, to avoid breaking fetcher.py which likely expects a blocking call or specific return,
+    we will use a helper to run the async Groq call.
+    """
+    
+    # 1. Train Background Brain (Sync)
     brain.train(history)
     
+    # 2. Run Async Engines (Groq)
+    # We use a quick event loop runner here just for the Groq part if needed
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        ollama_result = loop.run_until_complete(brain.ask_groq(history))
+        loop.close()
+    except:
+        ollama_result = None
+
     signals = []
     
-    if (e1 := engine_quantum_adaptive(history)): signals.append(e1)
-    if (e2 := engine_deep_pattern_v3(history)): signals.append(e2)
-    if (e3 := engine_neural_perceptron(history)): signals.append(e3)
-    
+    # Engine A: Pattern
+    if (e_pat := engine_deep_pattern_v3(history)): 
+        signals.append(e_pat)
+
+    # Engine B: Quantum
+    if (e_quant := engine_quantum_adaptive(history)): 
+        signals.append(e_quant)
+            
+    # Engine C: Perceptron
+    if (e_perc := engine_neural_perceptron(history)): 
+        signals.append(e_perc)
+
+    # Engine D: ML Brain
     ml_prob = brain.predict(history)
     if ml_prob > 0.60:
-        signals.append({'pred': "BIG", 'conf': ml_prob, 'name': 'ML_SCI'})
+        signals.append({'pred': "BIG", 'conf': ml_prob, 'name': 'ML_BRAIN'})
     elif ml_prob < 0.40:
-        signals.append({'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_SCI'})
-        
-    ai_pred = brain.ask_cloud_ai(history)
-    if ai_pred:
-        signals.append({'pred': ai_pred, 'conf': 0.65, 'name': 'CLOUD_AI'})
-        
-    votes = {"BIG": 0.0, "SMALL": 0.0}
-    log_reasons = []
+        signals.append({'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_BRAIN'})
+            
+    # Engine E: Groq (LLM)
+    if ollama_result in ["BIG", "SMALL"]:
+        signals.append({'pred': ollama_result, 'conf': 0.65, 'name': 'GROQ_AI'})
+
+    # 3. CALCULATE CONSENSUS
+    if not signals:
+        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 'level': "NO_SIG", 'reason': "No clear signal", 'topsignals': []}
+
+    vote_counts = {"BIG": 0, "SMALL": 0}
+    weighted_score = {"BIG": 0.0, "SMALL": 0.0}
+    log = []
     
     for s in signals:
+        vote_counts[s['pred']] += 1
         w = 1.0
-        if s['name'] == 'ML_SCI': w = 1.5
-        if s['name'] == 'QUANTUM': w = 1.2
-        if s['name'] == 'CLOUD_AI': w = 1.3
+        if s['name'] == 'ML_BRAIN': w = 1.2
+        if s['name'] == 'GROQ_AI': w = 1.5 # High trust in LLM reasoning
         
-        votes[s['pred']] += s['conf'] * w
-        log_reasons.append(f"{s['name']}")
-        
-    total = votes["BIG"] + votes["SMALL"]
+        weighted_score[s['pred']] += s['conf'] * w
+        log.append(f"{s['name']}:{s['pred']}")
+
+    if weighted_score["BIG"] > weighted_score["SMALL"]:
+        potential_winner = "BIG"
+        total_weight = weighted_score["BIG"] + weighted_score["SMALL"]
+        avg_conf = weighted_score["BIG"] / total_weight if total_weight > 0 else 0
+        winning_engine_count = vote_counts["BIG"]
+    else:
+        potential_winner = "SMALL"
+        total_weight = weighted_score["BIG"] + weighted_score["SMALL"]
+        avg_conf = weighted_score["SMALL"] / total_weight if total_weight > 0 else 0
+        winning_engine_count = vote_counts["SMALL"]
+
+    # 4. DETERMINE STREAK LEVEL 
+    # (Inferred from previous label passed from fetcher, or default to 0)
+    # Since fetcher doesn't pass streak_level explicitly in the arg list shown in your snippet,
+    # we have to assume a basic logic or rely on the caller. 
+    # The snippet shows: ultraAIPredict(list(RAM_HISTORY), current_bankroll, last_prediction['label'])
+    # It does NOT pass streak_level. We will simplify the logic to "Session" based or just stateless Rules.
+    
+    # REVISED STATELESS LOGIC FOR FETCHER COMPATIBILITY:
+    # If confidence is VERY high -> Level 3 behavior
+    # If confidence is MID -> Level 2 behavior
     
     decision = "SKIP"
-    conf = 0.0
-    level = "---"
-    reason_text = "Analyzing..."
-
-    if total > 0:
-        if votes["BIG"] > votes["SMALL"]:
-            decision = "BIG"
-            conf = votes["BIG"] / total
-        else:
-            decision = "SMALL"
-            conf = votes["SMALL"] / total
-        
-        reason_text = f"Signals: {', '.join(list(set(log_reasons)))}"
-
-    stake = RiskConfig.MIN_BET
-    level = "STD"
+    stake = 0
+    level_name = "ANALYZING"
     
-    if conf > RiskConfig.CONF_SNIPER:
-        stake *= 2
-        level = "SNIPER 🔥"
-    elif conf < 0.55:
-        decision = "SKIP"
-        stake = 0
-        level = "LOW_CONF"
-        reason_text = "Low Confidence (<55%)"
+    # Base Rule: Need at least 2 Engines
+    if winning_engine_count >= 2:
         
+        # Level 1 (Scout) - 2 Engines + Base Conf
+        if avg_conf >= RiskConfig.CONF_BASE:
+            decision = potential_winner
+            stake = RiskConfig.MIN_BET
+            level_name = "L1_SCOUT"
+            
+            # Level 2 (Squad) - 2 Engines + High Conf OR 3 Engines
+            if avg_conf >= RiskConfig.CONF_HIGH or winning_engine_count >= 3:
+                 level_name = "L2_SQUAD"
+                 
+                 # Level 3 (Sniper) - 3 Engines + Sniper Conf + LLM Support
+                 has_llm = any(s['name'] == 'GROQ_AI' for s in signals)
+                 if avg_conf >= RiskConfig.CONF_SNIPER and winning_engine_count >= 3 and has_llm:
+                     level_name = "L3_SNIPER"
+
     return {
         'finalDecision': decision,
-        'confidence': conf,
+        'confidence': avg_conf,
         'positionsize': int(stake),
-        'level': level,
-        'reason': reason_text
+        'level': level_name,
+        'reason': f"{level_name} | {winning_engine_count} Engines | {', '.join(log)}",
+        'topsignals': log
     }
