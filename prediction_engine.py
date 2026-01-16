@@ -78,7 +78,7 @@ def calc_rsi(data, period=14):
 
 class CloudLLM:
     def __init__(self):
-        self.api_key = os.getenv("GROQ_API_KEY") 
+        self.api_key = os.getenv("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") 
         self.url = "https://api.groq.com/openai/v1/chat/completions"
         self.model = "llama-3.1-8b-instant" # <--- UPDATED & WORKING
         self.last_pred = None
