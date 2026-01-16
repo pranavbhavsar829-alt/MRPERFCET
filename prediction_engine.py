@@ -1,46 +1,35 @@
-#!/usr/bin/env python3
-"""
-=============================================================================
-  TITAN V700 - STRICT HIERARCHY (RENDER COMPATIBLE)
-  
-  FIXES:
-  1. Added 'reset_engine_memory' to fix the Import Error.
-  2. Implements Strict Level 1/2/3 Logic.
-  3. Uses Ollama (Local) or falls back gracefully.
-=============================================================================
-"""
+# ==============================================================================
+# MODULE: PREDICTION_ENGINE.PY (V850 - CLOUD EDITION)
+# COMPATIBILITY: TITAN FETCHER V2026.8
+# CLOUD LLM: GROQ API (Replaces Local Ollama for Render)
+# ==============================================================================
 
 import math
 import statistics
-import traceback
 import asyncio
 import aiohttp
 import json
 import warnings
 import os
-from typing import Dict, List, Optional, Any
+from typing import Dict, List
 
-# Suppress warnings
 warnings.filterwarnings("ignore")
 
-# --- DATA SCIENCE LIBRARIES ---
+# --- OPTIONAL ML LIBRARIES (Graceful fallback for Render low-RAM envs) ---
 try:
     import pandas as pd
     import numpy as np
-    from scipy.stats import entropy
     from sklearn.neural_network import MLPClassifier
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.preprocessing import StandardScaler
+    ML_AVAILABLE = True
 except ImportError:
-    print("[CRITICAL] ML Libraries missing. Install: pip install pandas numpy scikit-learn scipy")
-    pd = None 
+    ML_AVAILABLE = False
+    print("[TITAN] ML Libraries (sklearn/pandas) not found. Running in Lightweight Mode.")
 
 # =============================================================================
-# CONSTANTS & CONFIG
+# 1. CONFIGURATION & CONSTANTS
 # =============================================================================
-
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3"
 
 class GameConstants:
     BIG = "BIG"
@@ -49,10 +38,9 @@ class GameConstants:
 
 class RiskConfig:
     MIN_BET = 50
-    STOP_LOSS_STREAK = 5
 
 # =============================================================================
-# UTILS
+# 2. UTILITY FUNCTIONS (SHARED)
 # =============================================================================
 
 def safe_float(value):
@@ -60,6 +48,7 @@ def safe_float(value):
     except: return 4.5
 
 def get_outcome_from_number(n):
+    """Maps 0-4 to SMALL, 5-9 to BIG."""
     val = int(safe_float(n))
     if 0 <= val <= 4: return "SMALL"
     if 5 <= val <= 9: return "BIG"
@@ -84,10 +73,116 @@ def calc_rsi(data, period=14):
     return 100.0 - (100.0 / (1.0 + rs))
 
 # =============================================================================
-# ENGINES
+# 3. CLOUD LLM HANDLER (GROQ)
 # =============================================================================
 
-# --- ENGINE 1: QUANTUM ADAPTIVE ---
+class CloudLLM:
+    def __init__(self):
+        self.api_key = os.getenv("GROQ_API_KEY") 
+        self.url = "https://api.groq.com/openai/v1/chat/completions"
+        self.model = "llama-3.1-8b-instant" # <--- UPDATED & WORKING
+        self.last_pred = None
+
+    async def analyze(self, history):
+        if not self.api_key:
+            return None 
+            
+        # Run only every 3 periods to save API limits
+        if len(history) % 3 != 0: 
+            return self.last_pred
+
+        nums = [d['actual_number'] for d in history[-12:]]
+        prompt = (
+            f"Lottery Pattern Analysis. Sequence: {nums}. "
+            "Numbers 0-4 are SMALL, 5-9 are BIG. "
+            "Identify the trend. Return ONLY JSON: {\"prediction\": \"BIG\"} or {\"prediction\": \"SMALL\"}."
+        )
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.5,
+            "response_format": {"type": "json_object"}
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(self.url, headers=headers, json=payload, timeout=5) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        content = data['choices'][0]['message']['content']
+                        js = json.loads(content)
+                        pred = js.get('prediction', '').upper()
+                        if pred in ["BIG", "SMALL"]:
+                            self.last_pred = pred
+                            return pred
+        except Exception as e:
+            print(f"[LLM ERROR] {e}")
+        return None
+
+cloud_brain = CloudLLM()
+
+# =============================================================================
+# 4. ENGINE TRACKER (ADAPTIVE)
+# =============================================================================
+
+class EngineTracker:
+    def __init__(self):
+        # [Correct, Total, ConsecutiveLoss, WeightMultiplier]
+        self.initial_state = [1, 1, 0, 1.0] 
+        self.stats = {
+            'QUANTUM': list(self.initial_state), 
+            'PATTERN': list(self.initial_state), 
+            'PERCEPTRON': list(self.initial_state), 
+            'ML_BRAIN': list(self.initial_state), 
+            'CLOUD_LLM': list(self.initial_state)
+        }
+        self.pending_votes = {}
+
+    def register_votes(self, issue, votes):
+        self.pending_votes[issue] = votes
+        keys = sorted(list(self.pending_votes.keys()))
+        if len(keys) > 10:
+            for k in keys[:-10]: del self.pending_votes[k]
+
+    def process_feedback(self, actual_issue, actual_number):
+        if str(actual_issue) not in self.pending_votes: return
+
+        votes = self.pending_votes[str(actual_issue)]
+        real_outcome = get_outcome_from_number(actual_number)
+
+        for name, pred in votes.items():
+            if name not in self.stats: self.stats[name] = list(self.initial_state)
+            
+            if pred == real_outcome:
+                self.stats[name][0] += 1 
+                self.stats[name][2] = 0  
+            else:
+                self.stats[name][2] += 1 
+
+            self.stats[name][1] += 1 
+            
+            if self.stats[name][2] >= 4:
+                self.stats[name][3] = 0.2 
+            elif self.stats[name][2] == 0:
+                self.stats[name][3] = 1.0 
+
+    def get_weight(self, name):
+        s = self.stats.get(name, self.initial_state)
+        accuracy = s[0] / max(1, s[1])
+        multiplier = s[3]
+        return max(0.15, accuracy * multiplier)
+
+tracker = EngineTracker()
+
+# =============================================================================
+# 5. LOGIC ENGINES
+# =============================================================================
+
 def engine_quantum_adaptive(history):
     try:
         nums = [safe_float(d['actual_number']) for d in history[-30:]]
@@ -98,19 +193,17 @@ def engine_quantum_adaptive(history):
         z = (nums[-1] - mean) / std
         strength = min(abs(z) / 2.5, 1.0)
         
-        if z > 1.4: return {'pred': "SMALL", 'conf': strength, 'name': 'QUANTUM'}
-        if z < -1.4: return {'pred': "BIG", 'conf': strength, 'name': 'QUANTUM'}
+        if z > 1.3: return {'pred': "SMALL", 'conf': strength, 'name': 'QUANTUM'}
+        if z < -1.3: return {'pred': "BIG", 'conf': strength, 'name': 'QUANTUM'}
     except: pass
     return None
 
-# --- ENGINE 2: DEEP PATTERN V3 ---
 def engine_deep_pattern_v3(history):
     try:
         if len(history) < 60: return None
         outcomes = "".join(["B" if get_outcome(d['actual_number']) == "BIG" else "S" for d in history])
         best_conf = 0
         best_pred = None
-        best_name = "PATTERN"
         
         for depth in range(6, 3, -1): 
             pat = outcomes[-depth:]
@@ -130,17 +223,15 @@ def engine_deep_pattern_v3(history):
             prob_b = next_b / cnt
             diff = abs(prob_b - 0.5) * 2 
             
-            if diff > best_conf and diff > 0.3:
+            if diff > best_conf and diff > 0.25: 
                 best_conf = diff
                 best_pred = "BIG" if prob_b > 0.5 else "SMALL"
-                best_name = f"PATTERN({depth})"
         
         if best_conf > 0:
-            return {'pred': best_pred, 'conf': best_conf, 'name': best_name}
+            return {'pred': best_pred, 'conf': best_conf, 'name': 'PATTERN'}
     except: pass
     return None
 
-# --- ENGINE 3: NEURAL PERCEPTRON ---
 def engine_neural_perceptron(history):
     try:
         nums = [safe_float(d['actual_number']) for d in history[-40:]]
@@ -155,26 +246,24 @@ def engine_neural_perceptron(history):
         prob = sigmoid(z)
         dist = abs(prob - 0.5) * 2
         
-        if prob > 0.55: return {'pred': "BIG", 'conf': dist, 'name': 'PERCEPTRON'}
-        if prob < 0.45: return {'pred': "SMALL", 'conf': dist, 'name': 'PERCEPTRON'}
+        if prob > 0.53: return {'pred': "BIG", 'conf': dist, 'name': 'PERCEPTRON'}
+        if prob < 0.47: return {'pred': "SMALL", 'conf': dist, 'name': 'PERCEPTRON'}
     except: pass
     return None
 
-# --- ENGINE 4 & 5: AI BRAIN (ML + OLLAMA) ---
 class TitanBrain:
     def __init__(self):
-        if pd:
-            self.clf_nn = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=2000, random_state=42) 
-            self.clf_rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+        if ML_AVAILABLE:
+            self.clf_nn = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42) 
+            self.clf_rf = RandomForestClassifier(n_estimators=50, max_depth=8, random_state=42)
             self.scaler = StandardScaler()
         else:
             self.clf_nn = None
         self.is_trained = False
-        self.last_ollama_pred = None
 
     def train(self, history):
-        if not self.clf_nn or len(history) < 50: return
-        if self.is_trained and len(history) % 10 != 0: return
+        if not ML_AVAILABLE or len(history) < 50: return
+        if self.is_trained and len(history) % 20 != 0: return
 
         try:
             df = pd.DataFrame(history)
@@ -219,131 +308,117 @@ class TitanBrain:
             
             p1 = self.clf_nn.predict_proba(self.scaler.transform(last))[0][1]
             p2 = self.clf_rf.predict_proba(last)[0][1]
-            
-            current_mean = last['rmean'].values[0]
-            ml_confidence = (p1 * 0.5) + (p2 * 0.5)
-            
-            if current_mean > 7.0: ml_confidence -= 0.15 
-            if current_mean < 2.0: ml_confidence += 0.15 
-
-            return max(0.0, min(1.0, ml_confidence))
+            return (p1 * 0.5) + (p2 * 0.5)
         except: return 0.5
 
-    async def ask_ollama(self, history):
-        if len(history) % 5 != 0: return self.last_ollama_pred
-        nums = [d['actual_number'] for d in history[-15:]]
-        prompt = f"Data: {nums}. Analyze trend. Next likely? Reply JSON: {{'prediction': 'SMALL' or 'BIG'}}"
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(OLLAMA_URL, json={"model":OLLAMA_MODEL, "prompt":prompt, "stream":False, "format":"json"}) as r:
-                    if r.status==200:
-                        js = await r.json()
-                        pred = json.loads(js['response']).get('prediction')
-                        if pred and pred.upper() in ['BIG', 'SMALL']:
-                            self.last_ollama_pred = pred.upper()
-                            return self.last_ollama_pred
-        except: pass
-        return None
-
-brain = TitanBrain()
+ml_brain = TitanBrain()
 
 # =============================================================================
-# EXPORTED FUNCTION: RESET MEMORY (CRITICAL FIX)
-# =============================================================================
-def reset_engine_memory():
-    """Clears the AI memory when a win/loss streak limit is hit."""
-    global brain
-    brain = TitanBrain()
-    print("[ENGINE] Memory Wiped (Circuit Breaker Reset)")
-
-# =============================================================================
-# MAIN CONTROLLER - STRICT PRIORITY
+# 6. MAIN CONTROLLER
 # =============================================================================
 
 def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str = "") -> Dict:
-    # 1. Train & Run Async Ollama
-    brain.train(history)
+    if not history:
+        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 'level': "NO_DATA", 'reason': "History Empty"}
+
+    latest_record = history[-1]
+    latest_issue = str(latest_record['issue'])
+    latest_num = int(latest_record['actual_number'])
+    
+    tracker.process_feedback(latest_issue, latest_num)
+
+    ml_brain.train(history)
+    
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        ollama_result = loop.run_until_complete(brain.ask_ollama(history))
+        llm_pred = loop.run_until_complete(cloud_brain.analyze(history))
         loop.close()
-    except: ollama_result = None
+    except: llm_pred = None
 
-    signals = []
+    raw_signals = {}
     
-    # Gather Signals
-    if (e_pat := engine_deep_pattern_v3(history)): signals.append(e_pat)
-    if (e_quant := engine_quantum_adaptive(history)): signals.append(e_quant)
-    if (e_perc := engine_neural_perceptron(history)): signals.append(e_perc)
+    if (e := engine_deep_pattern_v3(history)): raw_signals['PATTERN'] = e
+    if (e := engine_quantum_adaptive(history)): raw_signals['QUANTUM'] = e
+    if (e := engine_neural_perceptron(history)): raw_signals['PERCEPTRON'] = e
+    
+    ml_prob = ml_brain.predict(history)
+    if ml_prob > 0.55: raw_signals['ML_BRAIN'] = {'pred': "BIG", 'conf': ml_prob, 'name': 'ML_BRAIN'}
+    elif ml_prob < 0.45: raw_signals['ML_BRAIN'] = {'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_BRAIN'}
 
-    # ML Brain
-    ml_prob = brain.predict(history)
-    if ml_prob > 0.55: signals.append({'pred': "BIG", 'conf': ml_prob, 'name': 'ML_BRAIN'})
-    elif ml_prob < 0.45: signals.append({'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_BRAIN'})
+    if llm_pred:
+         raw_signals['CLOUD_LLM'] = {'pred': llm_pred, 'conf': 0.6, 'name': 'CLOUD_LLM'}
+
+    active_votes = []
+    vote_map_display = {}
+    vote_map_tracking = {}
+    
+    for name, sig in raw_signals.items():
+        vote_map_display[name] = sig['pred']
+        vote_map_tracking[name] = sig['pred']
+        weight = tracker.get_weight(name)
+        
+        if weight < 0.15: 
+            vote_map_display[name] += " (MUTED)"
+            continue
             
-    # Ollama
-    if ollama_result in ["BIG", "SMALL"]:
-        signals.append({'pred': ollama_result, 'conf': 0.70, 'name': 'OLLAMA'})
+        sig['weight'] = weight
+        active_votes.append(sig)
 
-    if not signals:
-        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 'level': "NO_SIG", 'reason': "Silence", 'topsignals': []}
+    try:
+        next_issue_id = str(int(latest_issue) + 1)
+        tracker.register_votes(next_issue_id, vote_map_tracking)
+    except: pass
 
-    # Vote Counting
-    votes_big = [s for s in signals if s['pred'] == "BIG"]
-    votes_small = [s for s in signals if s['pred'] == "SMALL"]
+    if not active_votes:
+        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
+                'level': "NO_VALID_SIG", 'reason': "All engines low confidence", 'raw_votes': vote_map_display}
+
+    big_team = [s for s in active_votes if s['pred'] == "BIG"]
+    small_team = [s for s in active_votes if s['pred'] == "SMALL"]
     
-    if len(votes_big) > len(votes_small):
-        decision = "BIG"
-        winning_team = votes_big
-        opposing_team = votes_small
+    big_score = sum(s['weight'] for s in big_team)
+    small_score = sum(s['weight'] for s in small_team)
+    
+    if big_score > small_score:
+        draft_decision = "BIG"
+        primary = big_team
+        final_conf = big_score
     else:
-        decision = "SMALL"
-        winning_team = votes_small
-        opposing_team = votes_big
+        draft_decision = "SMALL"
+        primary = small_team
+        final_conf = small_score
 
-    # Calculate Confidence (Weighted)
-    total_conf = sum(s['conf'] for s in winning_team)
-    total_opp = sum(s['conf'] for s in opposing_team)
-    avg_conf = total_conf / (total_conf + total_opp) if (total_conf + total_opp) > 0 else 0
-
-    # --- STRICT HIERARCHY CHECKS ---
-    supporting_names = [s['name'] for s in winning_team]
-    count = len(winning_team)
-    
-    has_ml = "ML_BRAIN" in supporting_names
-    has_ollama = "OLLAMA" in supporting_names
-    
+    level = "WAITING"
     stake = 0
-    level_name = f"WAITING ({count} Votes)"
+    supporting_names = [s['name'] for s in primary]
     
-    # LEVEL 1: Any 2 Engines (Scouts)
-    if count >= 2:
-        level_name = "L1_SCOUT"
+    if len(primary) >= 2:
+        level = "L1_SCOUT"
         stake = RiskConfig.MIN_BET
-    
-    # LEVEL 2: ML + OLLAMA (Strict Requirement)
-    if has_ml and has_ollama:
-        level_name = "L2_LEADER (ML+AI)"
-        stake = RiskConfig.MIN_BET
-    
-    # LEVEL 3: ML + OLLAMA + 1 OTHER (Sniper)
-    if has_ml and has_ollama and count >= 3:
-        level_name = "L3_SNIPER"
+    elif len(primary) == 1 and primary[0]['weight'] > 0.60:
+        level = "L1_SCOUT (Solo)"
         stake = RiskConfig.MIN_BET
 
-    # FAILSAFE: If no level triggers, SKIP.
-    if level_name.startswith("WAITING"):
-        decision = "SKIP"
-        stake = 0
+    if "ML_BRAIN" in supporting_names and "CLOUD_LLM" in supporting_names:
+        level = "L2_LEADER"
+        stake = RiskConfig.MIN_BET 
 
-    log_str = [f"{s['name']}:{s['pred']}" for s in signals]
+    ml_conf = next((s['conf'] for s in primary if s['name'] == "ML_BRAIN"), 0)
+    if len(primary) >= 3 and "ML_BRAIN" in supporting_names and ml_conf > 0.55:
+        level = "L3_SNIPER"
+        stake = RiskConfig.MIN_BET
+
+    if level == "WAITING":
+        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
+                'level': "WEAK_SIG", 'reason': "Split Vote", 'raw_votes': vote_map_display}
 
     return {
-        'finalDecision': decision,
-        'confidence': avg_conf,
-        'positionsize': int(stake),
-        'level': level_name,
-        'reason': f"{level_name} | Support: {', '.join(supporting_names)}",
-        'topsignals': log_str
+        'finalDecision': draft_decision,
+        'confidence': final_conf,
+        'positionsize': stake,
+        'level': level,
+        'reason': f"{level} | B:{len(big_team)} vs S:{len(small_team)}",
+        'topsignals': [f"{s['name']}" for s in primary],
+        'raw_votes': vote_map_display
     }
