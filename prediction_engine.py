@@ -1,7 +1,8 @@
 # ==============================================================================
-# MODULE: PREDICTION_ENGINE.PY (V850 - CLOUD EDITION)
+# MODULE: PREDICTION_ENGINE.PY (V850 - CLOUD EDITION - FIXED)
 # COMPATIBILITY: TITAN FETCHER V2026.8
-# CLOUD LLM: GROQ API (Replaces Local Ollama for Render)
+# CLOUD LLM: GROQ API
+# FIX: Added missing 'reset_engine_memory' function
 # ==============================================================================
 
 import math
@@ -15,7 +16,7 @@ from typing import Dict, List
 
 warnings.filterwarnings("ignore")
 
-# --- OPTIONAL ML LIBRARIES (Graceful fallback for Render low-RAM envs) ---
+# --- OPTIONAL ML LIBRARIES ---
 try:
     import pandas as pd
     import numpy as np
@@ -25,7 +26,7 @@ try:
     ML_AVAILABLE = True
 except ImportError:
     ML_AVAILABLE = False
-    print("[TITAN] ML Libraries (sklearn/pandas) not found. Running in Lightweight Mode.")
+    print("[TITAN] ML Libraries not found. Running in Lightweight Mode.")
 
 # =============================================================================
 # 1. CONFIGURATION & CONSTANTS
@@ -40,7 +41,7 @@ class RiskConfig:
     MIN_BET = 50
 
 # =============================================================================
-# 2. UTILITY FUNCTIONS (SHARED)
+# 2. UTILITY FUNCTIONS
 # =============================================================================
 
 def safe_float(value):
@@ -80,16 +81,12 @@ class CloudLLM:
     def __init__(self):
         self.api_key = os.getenv("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") 
         self.url = "https://api.groq.com/openai/v1/chat/completions"
-        self.model = "llama-3.1-8b-instant" # <--- UPDATED & WORKING
+        self.model = "llama-3.1-8b-instant" 
         self.last_pred = None
 
     async def analyze(self, history):
-        if not self.api_key:
-            return None 
-            
-        # Run only every 3 periods to save API limits
-        if len(history) % 3 != 0: 
-            return self.last_pred
+        if not self.api_key: return None 
+        if len(history) % 3 != 0: return self.last_pred
 
         nums = [d['actual_number'] for d in history[-12:]]
         prompt = (
@@ -120,8 +117,7 @@ class CloudLLM:
                         if pred in ["BIG", "SMALL"]:
                             self.last_pred = pred
                             return pred
-        except Exception as e:
-            print(f"[LLM ERROR] {e}")
+        except: pass
         return None
 
 cloud_brain = CloudLLM()
@@ -132,7 +128,6 @@ cloud_brain = CloudLLM()
 
 class EngineTracker:
     def __init__(self):
-        # [Correct, Total, ConsecutiveLoss, WeightMultiplier]
         self.initial_state = [1, 1, 0, 1.0] 
         self.stats = {
             'QUANTUM': list(self.initial_state), 
@@ -151,21 +146,17 @@ class EngineTracker:
 
     def process_feedback(self, actual_issue, actual_number):
         if str(actual_issue) not in self.pending_votes: return
-
         votes = self.pending_votes[str(actual_issue)]
         real_outcome = get_outcome_from_number(actual_number)
 
         for name, pred in votes.items():
             if name not in self.stats: self.stats[name] = list(self.initial_state)
-            
             if pred == real_outcome:
                 self.stats[name][0] += 1 
                 self.stats[name][2] = 0  
             else:
                 self.stats[name][2] += 1 
-
             self.stats[name][1] += 1 
-            
             if self.stats[name][2] >= 4:
                 self.stats[name][3] = 0.2 
             elif self.stats[name][2] == 0:
@@ -177,10 +168,27 @@ class EngineTracker:
         multiplier = s[3]
         return max(0.15, accuracy * multiplier)
 
+    def reset(self):
+        """Resets tracker stats to initial state."""
+        self.__init__()
+
 tracker = EngineTracker()
 
 # =============================================================================
-# 5. LOGIC ENGINES
+# 5. EXPORTED FUNCTIONS (INCLUDING FIX FOR IMPORT ERROR)
+# =============================================================================
+
+def reset_engine_memory():
+    """
+    Called by fetcher.py to clear AI learning stats.
+    Added to fix ImportError.
+    """
+    global tracker
+    tracker.reset()
+    print("[TITAN] Engine memory reset.")
+
+# =============================================================================
+# 6. LOGIC ENGINES
 # =============================================================================
 
 def engine_quantum_adaptive(history):
@@ -192,7 +200,6 @@ def engine_quantum_adaptive(history):
         if std == 0: return None
         z = (nums[-1] - mean) / std
         strength = min(abs(z) / 2.5, 1.0)
-        
         if z > 1.3: return {'pred': "SMALL", 'conf': strength, 'name': 'QUANTUM'}
         if z < -1.3: return {'pred': "BIG", 'conf': strength, 'name': 'QUANTUM'}
     except: pass
@@ -204,13 +211,11 @@ def engine_deep_pattern_v3(history):
         outcomes = "".join(["B" if get_outcome(d['actual_number']) == "BIG" else "S" for d in history])
         best_conf = 0
         best_pred = None
-        
         for depth in range(6, 3, -1): 
             pat = outcomes[-depth:]
             search = outcomes[:-1]
             cnt = search.count(pat)
             if cnt < 3: continue
-            
             next_b = 0
             start = 0
             while True:
@@ -219,14 +224,11 @@ def engine_deep_pattern_v3(history):
                 if idx + depth < len(search):
                     if search[idx+depth] == 'B': next_b += 1
                 start = idx + 1
-            
             prob_b = next_b / cnt
             diff = abs(prob_b - 0.5) * 2 
-            
             if diff > best_conf and diff > 0.25: 
                 best_conf = diff
                 best_pred = "BIG" if prob_b > 0.5 else "SMALL"
-        
         if best_conf > 0:
             return {'pred': best_pred, 'conf': best_conf, 'name': 'PATTERN'}
     except: pass
@@ -241,11 +243,9 @@ def engine_neural_perceptron(history):
         fast = statistics.mean(nums[-5:])
         slow = statistics.mean(nums[-20:])
         mom = (fast - slow) / 10
-        
         z = (norm_rsi * -1.5) + (mom * 1.2)
         prob = sigmoid(z)
         dist = abs(prob - 0.5) * 2
-        
         if prob > 0.53: return {'pred': "BIG", 'conf': dist, 'name': 'PERCEPTRON'}
         if prob < 0.47: return {'pred': "SMALL", 'conf': dist, 'name': 'PERCEPTRON'}
     except: pass
@@ -264,27 +264,22 @@ class TitanBrain:
     def train(self, history):
         if not ML_AVAILABLE or len(history) < 50: return
         if self.is_trained and len(history) % 20 != 0: return
-
         try:
             df = pd.DataFrame(history)
             df['num'] = df['actual_number'].astype(int)
             df['label'] = df['num'].apply(lambda x: 1 if x >= 5 else 0)
-            
             df['rmean'] = df['num'].rolling(10).mean()
             df['std'] = df['num'].rolling(10).std()
             delta = df['num'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             df['rsi'] = 100 - (100 / (1 + (gain/loss)))
-            
             df = df.fillna(0)
             df['target'] = df['label'].shift(-1)
             df = df.dropna()
-            
             feats = ['rmean', 'std', 'num', 'rsi'] 
             X = df[feats]
             y = df['target']
-            
             X_s = self.scaler.fit_transform(X)
             self.clf_nn.fit(X_s, y)
             self.clf_rf.fit(X, y)
@@ -303,9 +298,7 @@ class TitanBrain:
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             df['rsi'] = 100 - (100 / (1 + (gain/loss)))
             df = df.fillna(0)
-            
             last = df.iloc[[-1]][['rmean', 'std', 'num', 'rsi']]
-            
             p1 = self.clf_nn.predict_proba(self.scaler.transform(last))[0][1]
             p2 = self.clf_rf.predict_proba(last)[0][1]
             return (p1 * 0.5) + (p2 * 0.5)
@@ -314,7 +307,7 @@ class TitanBrain:
 ml_brain = TitanBrain()
 
 # =============================================================================
-# 6. MAIN CONTROLLER
+# 7. MAIN CONTROLLER
 # =============================================================================
 
 def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str = "") -> Dict:
