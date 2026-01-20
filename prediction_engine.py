@@ -1,15 +1,6 @@
-#!/usr/bin/env python3
-"""
-=============================================================================
-  TITAN V1000 - VISUAL THINKER (CLOUD EDITION)
-  
-  UPDATES:
-  1. CLOUD BRAIN: Uses Groq (Llama 3.1) instead of Local Ollama.
-  2. LIVE LOGGING: Prints every Cloud thought instantly to the console.
-  3. VISIBILITY: You will see the 'Vote Count' building up in real-time.
-=============================================================================
-"""
-
+# ==============================================================================
+# MODULE: PREDICTION_ENGINE.PY (V2026.37 - GHOST REVERSAL HUNTER)
+# ==============================================================================
 import math
 import statistics
 import asyncio
@@ -18,11 +9,12 @@ import json
 import warnings
 import time
 import random
-import os
+from collections import defaultdict, Counter
 from typing import Dict, List, Optional, Any
 
 warnings.filterwarnings("ignore")
 
+# --- ML IMPORTS ---
 try:
     import pandas as pd
     import numpy as np
@@ -31,28 +23,21 @@ try:
     from sklearn.preprocessing import StandardScaler
 except ImportError:
     pd = None
-    print("[TITAN] ML Libraries not found. Running in Lightweight Mode.")
+    print("[WARN] Pandas/Sklearn not found. ML features disabled.")
 
-# =============================================================================
-# CONSTANTS & CONFIG
-# =============================================================================
+# --- XGBOOST IMPORT ---
+try:
+    import xgboost as xgb
+    XGB_AVAILABLE = True
+except ImportError:
+    XGB_AVAILABLE = False
+    print("[WARN] XGBoost not found. XGB engine disabled.")
 
-# GROQ CONFIGURATION
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.1-8b-instant"
+# --- CONFIG ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "llama3"
 
-class GameConstants:
-    BIG = "BIG"
-    SMALL = "SMALL"
-    SKIP = "SKIP"
-
-class RiskConfig:
-    MIN_BET = 50
-
-# =============================================================================
-# UTILS
-# =============================================================================
-
+# --- HELPER FUNCTIONS ---
 def safe_float(value):
     try: return float(value)
     except: return 4.5
@@ -66,67 +51,52 @@ def get_outcome_from_number(n):
 def get_outcome(n):
     return get_outcome_from_number(n)
 
-def sigmoid(x):
-    try: return 1 / (1 + math.exp(-x))
-    except: return 0.0 if x < 0 else 1.0
-
-def calc_rsi(data, period=14):
-    if len(data) < period + 1: return 50.0
-    deltas = [data[i] - data[i-1] for i in range(1, len(data))]
-    gains = [d if d > 0 else 0 for d in deltas]
-    losses = [-d if d < 0 else 0 for d in deltas]
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    if avg_loss == 0: return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
-
 # =============================================================================
-# TRACKER
+# 1. MATH CORE LOGIC
 # =============================================================================
 
-class EngineTracker:
-    def __init__(self):
-        initial_confidence = [1, 1, 1] 
-        self.stats = {
-            'QUANTUM': list(initial_confidence), 
-            'PATTERN': list(initial_confidence), 
-            'PERCEPTRON': list(initial_confidence), 
-            'ML_ENSEMBLE': list(initial_confidence), 
-            'OLLAMA_COUNCIL': list(initial_confidence) # Kept name for compatibility
-        }
+def math_trap_detector(history, window=12):
+    """Detects alternating chop (B/S/B/S) which kills AI models."""
+    try:
+        if len(history) < window: return False, 0.0
+        outcomes = [get_outcome(d['actual_number']) for d in history[-window:]]
+        # Count how many times it flips (Big->Small or Small->Big)
+        flips = sum(1 for i in range(len(outcomes)-1) if outcomes[i] != outcomes[i+1])
+        # Trap Score: 1.0 = Perfect Chop (Worst for AI), 0.0 = Perfect Streak
+        trap_score = flips / (window - 1)
+        return (trap_score > 0.65), trap_score
+    except: return False, 0.0
 
-    def update(self, actual_outcome, engine_votes):
-        for name, pred in engine_votes.items():
-            if name in self.stats and pred in ["BIG", "SMALL"]:
-                if len(self.stats[name]) >= 10: self.stats[name].pop(0)
-                is_correct = 1 if pred == actual_outcome else 0
-                self.stats[name].append(is_correct)
+def math_streak_finder(history):
+    """Returns current streak length. Positive for BIG, Negative for SMALL"""
+    try:
+        if not history: return 0
+        outcomes = [get_outcome(d['actual_number']) for d in history[-20:]]
+        if not outcomes: return 0
+        
+        current = outcomes[-1]
+        cnt = 1
+        for i in range(len(outcomes)-2, -1, -1):
+            if outcomes[i] == current: cnt += 1
+            else: break
+        return cnt if current == "BIG" else -cnt
+    except: return 0
 
-    def get_weight(self, name):
-        history = self.stats.get(name, [])
-        if not history: return 0.5 
-        return sum(history) / len(history)
-    
-    def reset(self):
-        self.__init__()
-
-tracker = EngineTracker()
+def math_volatility(history, window=20):
+    """Calculates volatility (Standard Deviation of 0/1 signal)"""
+    try:
+        if len(history) < window: return 0.0
+        # Convert to 1 (BIG) and 0 (SMALL)
+        nums = [1 if get_outcome(d['actual_number']) == "BIG" else 0 for d in history[-window:]]
+        return statistics.pstdev(nums) # 0.5 is max volatility, 0.0 is zero
+    except: return 0.0
 
 # =============================================================================
-# EXPORTED FUNCTION (FIX FOR FETCHER ERROR)
-# =============================================================================
-
-def reset_engine_memory():
-    """Called by fetcher.py to clear AI learning stats."""
-    tracker.reset()
-    print("[TITAN] Engine memory reset.")
-
-# =============================================================================
-# STANDARD ENGINES
+# 2. STANDARD ENGINES (Support)
 # =============================================================================
 
 def engine_quantum_adaptive(history):
+    """Detects statistical deviation (Z-Score)"""
     try:
         nums = [safe_float(d['actual_number']) for d in history[-30:]]
         if len(nums) < 20: return None
@@ -134,18 +104,20 @@ def engine_quantum_adaptive(history):
         std = statistics.stdev(nums) if len(nums) > 1 else 0
         if std == 0: return None
         z = (nums[-1] - mean) / std
-        strength = min(abs(z) / 2.5, 1.0)
-        if z > 1.3: return {'pred': "SMALL", 'conf': strength, 'name': 'QUANTUM'}
-        if z < -1.3: return {'pred': "BIG", 'conf': strength, 'name': 'QUANTUM'}
+        strength = min(abs(z) / 2.2, 1.0)
+        
+        # ACTIVE TUNING: Low threshold to catch reversals
+        if z > 1.1: return {'pred': "SMALL", 'conf': strength, 'name': 'QUANTUM'}
+        if z < -1.1: return {'pred': "BIG", 'conf': strength, 'name': 'QUANTUM'}
     except: pass
     return None
 
 def engine_deep_pattern_v3(history):
+    """Finds repeating sequences"""
     try:
         if len(history) < 60: return None
         outcomes = "".join(["B" if get_outcome(d['actual_number']) == "BIG" else "S" for d in history])
-        best_conf = 0
-        best_pred = None
+        best_conf = 0; best_pred = None
         
         for depth in range(6, 3, -1): 
             pat = outcomes[-depth:]
@@ -153,8 +125,7 @@ def engine_deep_pattern_v3(history):
             cnt = search.count(pat)
             if cnt < 3: continue
             
-            next_b = 0
-            start = 0
+            next_b = 0; start = 0
             while True:
                 idx = search.find(pat, start)
                 if idx == -1: break
@@ -165,7 +136,8 @@ def engine_deep_pattern_v3(history):
             prob_b = next_b / cnt
             diff = abs(prob_b - 0.5) * 2 
             
-            if diff > best_conf and diff > 0.25:
+            # ACTIVE TUNING: 14% edge is enough
+            if diff > best_conf and diff > 0.14: 
                 best_conf = diff
                 best_pred = "BIG" if prob_b > 0.5 else "SMALL"
         
@@ -174,269 +146,284 @@ def engine_deep_pattern_v3(history):
     except: pass
     return None
 
-def engine_neural_perceptron(history):
+def engine_markov_matrix(history):
+    """Probability based on previous 2 outcomes"""
     try:
-        nums = [safe_float(d['actual_number']) for d in history[-40:]]
-        if len(nums) < 25: return None
-        rsi = calc_rsi(nums)
-        norm_rsi = (rsi - 50) / 100
-        fast = statistics.mean(nums[-5:])
-        slow = statistics.mean(nums[-20:])
-        mom = (fast - slow) / 10
+        if len(history) < 50: return None
+        outcomes = [get_outcome(d['actual_number']) for d in history]
+        last_2 = tuple(outcomes[-2:])
+        transitions = defaultdict(int)
+        for i in range(len(outcomes) - 2):
+            curr = tuple(outcomes[i:i+2])
+            nxt = outcomes[i+2]
+            if curr == last_2:
+                transitions[nxt] += 1
         
-        z = (norm_rsi * -1.5) + (mom * 1.2)
-        prob = sigmoid(z)
-        dist = abs(prob - 0.5) * 2
+        total = transitions["BIG"] + transitions["SMALL"]
+        if total < 5: return None
+        p_big = transitions["BIG"] / total
         
-        if prob > 0.53: return {'pred': "BIG", 'conf': dist, 'name': 'PERCEPTRON'}
-        if prob < 0.47: return {'pred': "SMALL", 'conf': dist, 'name': 'PERCEPTRON'}
+        # ACTIVE TUNING: 54% probability is enough
+        if p_big > 0.54: return {'pred': "BIG", 'conf': p_big, 'name': 'MARKOV'}
+        if p_big < 0.46: return {'pred': "SMALL", 'conf': 1-p_big, 'name': 'MARKOV'}
     except: pass
     return None
 
 # =============================================================================
-# DEEP BRAIN (THE TIME-LOCKED ANALYST - NOW WITH GROQ)
+# 3. DEEP BRAIN (Commanders)
 # =============================================================================
 
 class TitanDeepBrain:
     def __init__(self):
         self.scaler = StandardScaler() if pd else None
         self.models_ready = False
-        self.m1 = None
-        self.m2 = None
-        # Different perspectives to ask Groq
+        self.m1 = None; self.m2 = None; self.m3 = None 
+        self.last_train_round = 0
         self.perspectives = [
-            "Trend Analysis",
-            "Reversal Check",
-            "Noise Filtering",
-            "Contrarian Logic",
-            "Pattern Match"
+            "Analyze sequence. Predict next.",
+            "Analyze volatility. Chopping or trending?",
+            "Ignore rules. Use intuition."
         ]
-        self.api_key = os.getenv("GROQ_API_KEY")
 
-    def train_ensemble(self, history):
-        if not pd or len(history) < 100: return
+    def train_ensemble(self, history, current_round_id):
+        if self.models_ready and (current_round_id - self.last_train_round < 15): return
+        if not pd or len(history) < 60: return
         try:
             df = pd.DataFrame(history)
             df['num'] = df['actual_number'].astype(int)
             df['label'] = df['num'].apply(lambda x: 1 if x >= 5 else 0)
-            df['rmean'] = df['num'].rolling(10).mean()
-            df['std'] = df['num'].rolling(10).std()
+            df['rmean'] = df['num'].rolling(8).mean()
+            df['std'] = df['num'].rolling(8).std()
             df = df.fillna(0)
             df['target'] = df['label'].shift(-1)
             train_df = df.dropna()
-            
             X = train_df[['rmean', 'std', 'num']]
             y = train_df['target']
             X_s = self.scaler.fit_transform(X)
 
-            self.m1 = MLPClassifier(hidden_layer_sizes=(50,), max_iter=500).fit(X_s, y)
-            self.m2 = RandomForestClassifier(n_estimators=50, max_depth=5).fit(X, y)
+            self.m1 = MLPClassifier(hidden_layer_sizes=(50,), max_iter=300).fit(X_s, y)
+            self.m2 = RandomForestClassifier(n_estimators=50, max_depth=6).fit(X, y)
+            if XGB_AVAILABLE:
+                self.m3 = xgb.XGBClassifier(n_estimators=50, max_depth=5, eval_metric='logloss').fit(X, y)
             self.models_ready = True
+            self.last_train_round = current_round_id
         except: pass
 
     async def forced_contemplation_loop(self, history, time_budget):
-        """
-        LOCKED LOOP: Keeps asking Groq until time expires.
-        """
-        if not self.api_key:
-            return None, 0.0
-
         start_time = time.time()
-        end_time = start_time + time_budget
-        
+        end_time = start_time + (time_budget - 2)
         votes = []
-        iteration = 0
-        nums = [d['actual_number'] for d in history[-15:]]
+        nums = [d['actual_number'] for d in history[-20:]]
         
-        print(f"   [DEEP] Entering Cloud Time-Lock for {time_budget:.0f}s... (Watch the Thoughts)")
-        
-        while time.time() < end_time:
-            iteration += 1
+        for task in self.perspectives:
+            if time.time() > end_time: break
+            prompt = f"Data: {nums}. Task: {task}. Reply strictly JSON: {{'prediction': 'SMALL' or 'BIG'}}"
+            res = await self._query_ollama(prompt)
+            if res: votes.append(res)
             
-            # 1. Pick a perspective
-            perspective_idx = iteration % len(self.perspectives)
-            task_name = self.perspectives[perspective_idx]
-            task_prompt = f"Analyze using {task_name}. Predict SMALL or BIG."
-            
-            # 2. Ask Groq
-            prediction = await self._query_groq(nums, task_prompt)
-            
-            # 3. PRINT THE THOUGHT (VISUAL FEEDBACK)
-            if prediction:
-                votes.append(prediction)
-                print(f"      -> [THOUGHT {iteration}] {task_name}: {prediction}")
-            else:
-                print(f"      -> [THOUGHT {iteration}] {task_name}: ...Thinking...")
-
-            # 4. Pace the requests (1 second sleep)
-            await asyncio.sleep(1.0)
-
-        elapsed = time.time() - start_time
-        print(f"   [DEEP] Analysis Finished. ({iteration} cloud simulations in {elapsed:.1f}s)")
-        
         if not votes: return None, 0.0
-
-        big_count = votes.count("BIG")
-        small_count = votes.count("SMALL")
+        big_count = votes.count("BIG"); small_count = votes.count("SMALL")
         total = big_count + small_count
-        
-        # Display Final Vote Count
-        print(f"   [VOTE] BIG: {big_count} | SMALL: {small_count}")
-        
         if total == 0: return None, 0.0
-        
-        if big_count > small_count:
-            conf = big_count / total
-            return "BIG", conf
-        elif small_count > big_count:
-            conf = small_count / total
-            return "SMALL", conf
-        
+        if big_count > small_count: return "BIG", big_count/total
+        elif small_count > big_count: return "SMALL", small_count/total
         return None, 0.0
 
-    async def _query_groq(self, nums, task):
-        nonce = random.randint(1000, 9999)
-        prompt = f"Data: {nums}. Question: {task} [ID:{nonce}]. Reply JSON: {{'prediction': 'SMALL' or 'BIG'}}"
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": GROQ_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7, # Little variability for the 'Council' effect
-            "response_format": {"type": "json_object"}
-        }
-
+    async def _query_ollama(self, prompt):
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.post(GROQ_API_URL, json=payload, headers=headers, timeout=5) as r:
-                    if r.status == 200:
+                async with s.post(OLLAMA_URL, json={"model":OLLAMA_MODEL, "prompt":prompt, "stream":False, "format":"json"}, timeout=10) as r:
+                    if r.status==200:
                         js = await r.json()
-                        content = js['choices'][0]['message']['content']
-                        # Parse JSON response
-                        try:
-                            data = json.loads(content)
-                            pred = data.get('prediction')
-                            return pred.upper() if pred else None
-                        except: return None
+                        pred = json.loads(js['response']).get('prediction')
+                        return pred.upper() if pred else None
         except: return None
         return None
 
 brain = TitanDeepBrain()
 
 # =============================================================================
-# MAIN CONTROLLER
+# 4. MAIN CONTROLLER (REVERSAL HUNTER V2026.37)
 # =============================================================================
 
-def ultraAIPredict(history: List[Dict], current_bankroll: float, last_label: str = "", time_budget: int = 5) -> Dict:
+async def ultraAIPredict(history: List[Dict], current_bankroll: float, last_win_status="WIN", current_momentum=0.0, ghost_wins_streak=0, ghost_loss_streak=0, time_budget: int = 30) -> Dict:
     
-    # 1. TRAIN ML
-    brain.train_ensemble(history)
-    
-    # 2. RUN TIME-LOCKED ANALYSIS (Uses Groq)
+    # --- A. MATH CORE DIAGNOSTICS ---
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        ollama_pred, ollama_conf = loop.run_until_complete(brain.forced_contemplation_loop(history, time_budget))
-        loop.close()
-    except: 
-        ollama_pred = None
-        ollama_conf = 0.0
+        last_num = int(history[-1]['actual_number'])
+        current_issue_int = int(history[-1]['issue'])
+    except:
+        return {'finalDecision': "SKIP", 'confidence': 0, 'level': "ERR", 'reason': "Bad Data", 'raw_votes': {}}
 
-    # 3. GATHER RESULTS
+    is_trap_number = (last_num == 0 or last_num == 5)
+    
+    # 1. TRAP/CHOP DETECTOR
+    is_chopping, chop_score = math_trap_detector(history)
+    
+    # 2. STREAK DETECTOR
+    streak_val = math_streak_finder(history)
+    streak_len = abs(streak_val)
+    
+    # 3. VOLATILITY CHECK
+    vol_score = math_volatility(history)
+
+    # --- B. BACKGROUND TRAINING ---
+    await asyncio.to_thread(brain.train_ensemble, history, current_issue_int)
+
+    # --- C. OLLAMA COUNCIL ---
+    ollama_pred = None; ollama_conf = 0.0
+    try:
+        ollama_pred, ollama_conf = await brain.forced_contemplation_loop(history, time_budget)
+    except: pass
+
+    # --- D. GATHER SIGNALS ---
     raw_signals = {}
     
-    if (e := engine_deep_pattern_v3(history)): raw_signals['PATTERN'] = e
-    if (e := engine_quantum_adaptive(history)): raw_signals['QUANTUM'] = e
-    if (e := engine_neural_perceptron(history)): raw_signals['PERCEPTRON'] = e
-    
-    ml_prob = 0.5
+    # XGB
+    if brain.models_ready and pd and brain.m3:
+        try:
+            df = pd.DataFrame(history); df['num'] = df['actual_number'].astype(int)
+            df['rmean'] = df['num'].rolling(10).mean(); df['std'] = df['num'].rolling(10).std()
+            df = df.fillna(0); last = df.iloc[[-1]][['rmean', 'std', 'num']]
+            p3 = brain.m3.predict_proba(last)[0][1]
+            if p3 > 0.51: raw_signals['XGB'] = {'pred': "BIG", 'conf': p3} 
+            elif p3 < 0.49: raw_signals['XGB'] = {'pred': "SMALL", 'conf': 1-p3}
+        except: pass
+
+    # ML Ensemble
     if brain.models_ready and pd:
          try:
-            df = pd.DataFrame(history)
-            df['num'] = df['actual_number'].astype(int)
-            df['rmean'] = df['num'].rolling(10).mean()
-            df['std'] = df['num'].rolling(10).std()
-            df = df.fillna(0)
-            last = df.iloc[[-1]][['rmean', 'std', 'num']]
+            df = pd.DataFrame(history); df['num'] = df['actual_number'].astype(int)
+            df['rmean'] = df['num'].rolling(10).mean(); df['std'] = df['num'].rolling(10).std()
+            df = df.fillna(0); last = df.iloc[[-1]][['rmean', 'std', 'num']]
             p1 = brain.m1.predict_proba(brain.scaler.transform(last))[0][1]
             p2 = brain.m2.predict_proba(last)[0][1]
             ml_prob = (p1 + p2) / 2
+            if ml_prob > 0.51: raw_signals['ML'] = {'pred': "BIG", 'conf': ml_prob} 
+            elif ml_prob < 0.49: raw_signals['ML'] = {'pred': "SMALL", 'conf': 1-ml_prob}
          except: pass
 
-    if ml_prob > 0.55: raw_signals['ML_ENSEMBLE'] = {'pred': "BIG", 'conf': ml_prob, 'name': 'ML_ENSEMBLE'}
-    elif ml_prob < 0.45: raw_signals['ML_ENSEMBLE'] = {'pred': "SMALL", 'conf': 1-ml_prob, 'name': 'ML_ENSEMBLE'}
-
+    # Ollama
     if ollama_pred:
-         raw_signals['OLLAMA_COUNCIL'] = {'pred': ollama_pred, 'conf': ollama_conf, 'name': 'OLLAMA_COUNCIL'}
+         raw_signals['OLLAMA'] = {'pred': ollama_pred, 'conf': ollama_conf}
 
-    # 4. FILTERING
-    active_votes = []
-    vote_map = {} 
-    
+    # Support Engines
+    if (e := engine_deep_pattern_v3(history)): raw_signals['PATTERN'] = e
+    if (e := engine_quantum_adaptive(history)): raw_signals['QUANTUM'] = e
+    if (e := engine_markov_matrix(history)): raw_signals['MARKOV'] = e
+
+    # --- E. SCORING ---
+    big_points = 0.0
+    small_points = 0.0
+    vote_display = {}
+
     for name, sig in raw_signals.items():
-        vote_map[name] = sig['pred']
-        weight = tracker.get_weight(name)
-        if weight < 0.15: continue 
-        sig['weight'] = weight
-        active_votes.append(sig)
+        vote_display[name] = sig['pred']
+        points = 1.0
+        if name in ["ML", "OLLAMA", "XGB"]: points = 1.5 
+        
+        if sig['pred'] == "BIG": big_points += points
+        else: small_points += points
 
-    if not active_votes:
-        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
-                'level': "NO_SIG", 'reason': "Silence", 'raw_votes': {}, 'topsignals': []}
-
-    big_team = [s for s in active_votes if s['pred'] == "BIG"]
-    small_team = [s for s in active_votes if s['pred'] == "SMALL"]
-    
-    if len(big_team) > len(small_team):
-        draft_decision = "BIG"
-        primary = big_team
-        opposing = small_team
+    if big_points > small_points:
+        final_decision = "BIG"
+        raw_score = big_points - small_points
     else:
-        draft_decision = "SMALL"
-        primary = small_team
-        opposing = big_team
+        final_decision = "SMALL"
+        raw_score = small_points - big_points
 
-    # 5. VETO
-    for opp in opposing:
-        if opp['weight'] > 0.75:
-             return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
-                'level': "VETOED", 'reason': f"Conflict: {opp['name']}", 'raw_votes': vote_map, 'topsignals': []}
-
-    # 6. LEVEL ASSIGNMENT
-    level = "WAITING"
-    stake = 0
-    supporting_names = [s['name'] for s in primary]
+    # --- F. SMART ADJUSTMENTS ---
+    net_score = raw_score
     
-    if len(primary) >= 2:
+    # 1. CHOP GUARD
+    if is_chopping:
+        net_score -= 1.5
+        vote_display['MATH_CHOP'] = f"-1.5"
+    
+    # 2. TREND RIDER
+    if streak_len >= 3:
+        streak_pred = "BIG" if streak_val > 0 else "SMALL"
+        if streak_pred == final_decision:
+            net_score += 0.5
+            vote_display['MATH_TREND'] = f"+0.5"
+        else:
+            net_score -= 0.5
+            vote_display['MATH_TREND'] = "FIGHTING"
+
+    # 3. TRAP NUMBER PENALTY
+    if is_trap_number:
+        net_score -= 0.8 
+        vote_display['TRAP_WARN'] = "0/5"
+
+    # 4. MOMENTUM
+    if current_momentum != 0:
+        net_score += current_momentum
+        vote_display['MOMENTUM'] = f"{current_momentum:+.1f}"
+    
+    # 5. GHOST ADJUSTMENTS
+    if ghost_wins_streak >= 2:
+        net_score += 0.5
+        vote_display['GHOST_HOT'] = f"+0.5 ({ghost_wins_streak}W)"
+    
+    if ghost_loss_streak >= 2:
+        # Penalize slightly normally, but we check for breakthrough below
+        vote_display['GHOST_COLD'] = f"({ghost_loss_streak}L)"
+
+    # --- G. DECISION LOGIC (REVERSAL HUNTER EDITION) ---
+    
+    REAL_THRESHOLD = 1.25       
+    GHOST_THRESHOLD = 0.5      
+    RECOVERY_THRESHOLD = 2.0   
+
+    if last_win_status == "LOSS":
+        REAL_THRESHOLD = RECOVERY_THRESHOLD 
+        vote_display['MODE'] = "RECOVERY"
+    else:
+        vote_display['MODE'] = "STANDARD"
+
+    # VOLATILITY LOCK CHECK
+    is_volatile = vol_score > 0.48
+    
+    # === BREAKTHROUGH LOGIC ===
+    # 1. Hot Hand: 2+ consecutive ghost wins.
+    # 2. Reversal Hunter: 2+ ghost losses AND High Confidence (> 4.5).
+    # 3. Titan Mode: Score is just massive (> 4.5) regardless of history.
+    
+    hot_hand_unlock = (ghost_wins_streak >= 2)
+    reversal_unlock = (ghost_loss_streak >= 2 and net_score >= 4.5)
+    titan_override = (net_score >= 4.5)
+
+    can_bypass_volatility = hot_hand_unlock or reversal_unlock or titan_override
+    
+    if reversal_unlock:
+        vote_display['STRATEGY'] = "REVERSAL_HUNTER"
+
+    # DECISION TREE
+    if is_volatile and not can_bypass_volatility:
+        level = "GHOST_SIM"
+        vote_display['MODE'] = "HIGH_VOLATILITY_LOCKED"
+    
+    elif net_score >= REAL_THRESHOLD:
         level = "L1_SCOUT"
-        stake = RiskConfig.MIN_BET
-    elif len(primary) == 1 and primary[0]['weight'] > 0.60:
-        level = "L1_SCOUT (Solo)"
-        stake = RiskConfig.MIN_BET
-
-    if "ML_ENSEMBLE" in supporting_names and "OLLAMA_COUNCIL" in supporting_names:
-        level = "L2_LEADER"
-        stake = RiskConfig.MIN_BET 
-
-    ml_conf = next((s['conf'] for s in primary if s['name'] == "ML_ENSEMBLE"), 0)
-    if len(primary) >= 3 and "ML_ENSEMBLE" in supporting_names and ml_conf > 0.55:
-        level = "L3_SNIPER"
-        stake = RiskConfig.MIN_BET
-
-    if level == "WAITING":
-        return {'finalDecision': "SKIP", 'confidence': 0, 'positionsize': 0, 
-                'level': "WEAK", 'reason': "Split", 'raw_votes': vote_map, 'topsignals': []}
+        if net_score >= 3.0: level = "L2_LEADER"
+        if net_score >= 4.5: level = "L3_TITAN"
+        
+        # If we broke through volatility, tag it
+        if is_volatile and can_bypass_volatility:
+            vote_display['MODE'] = "VOLATILITY_BREACHED"
+    
+    elif net_score >= GHOST_THRESHOLD and not is_trap_number and not is_chopping:
+        level = "GHOST_SIM"
+        vote_display['MODE'] = "GHOST"
+    
+    else:
+        level = "SKIP"
+        final_decision = "SKIP" 
 
     return {
-        'finalDecision': draft_decision,
-        'confidence': sum(s['weight'] for s in primary) / len(primary),
-        'positionsize': stake,
+        'finalDecision': final_decision,
+        'confidence': net_score,
         'level': level,
-        'reason': f"{level} | {len(primary)} vs {len(opposing)}",
-        'topsignals': [f"{s['name']}({s['weight']:.1f})" for s in primary],
-        'raw_votes': vote_map
+        'reason': f"Score: {net_score:.1f}",
+        'raw_votes': vote_display
     }
